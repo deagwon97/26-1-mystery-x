@@ -7,7 +7,7 @@ on:
       - '.github/**'
       - 'README.md'
       - 'docs/**'
-      - '**/*.md'
+      - '../../readme.md'
 
 env:
   IMAGE_NAME: ghcr.io/hyeon9mak/buchoipark
