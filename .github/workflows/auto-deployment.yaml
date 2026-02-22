@@ -31,9 +31,10 @@ jobs:
           cache: 'gradle'
 
       - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
+        run: chmod +x BuChoiPark/gradlew
 
       - name: Build with Gradle
+        working-directory: ./BuChoiPark
         run: ./gradlew clean build -x test
 
       - name: Log in to GHCR
@@ -50,7 +51,8 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
-          context: .
+          context: ./BuChoiPark
+          file: ./BuChoiPark/Dockerfile
           push: true
           tags: |
             ${{ env.IMAGE_NAME }}:${{ steps.version.outputs.VERSION }}
