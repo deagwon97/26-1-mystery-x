@@ -26,11 +26,20 @@ dependencies {
 	//	implementation("org.springframework.shell:spring-shell-starter")
 	//	runtimeOnly("io.micrometer:micrometer-registry-prometheus")
 
-	implementation("org.springframework.boot:spring-boot-starter-actuator")
-	implementation("org.springframework.boot:spring-boot-starter-webmvc")
+	// kotlin, jackson
 	implementation("org.jetbrains.kotlin:kotlin-reflect")
 	implementation("tools.jackson.module:jackson-module-kotlin")
 
+	// spring web
+	implementation("org.springframework.boot:spring-boot-starter-actuator")
+	implementation("org.springframework.boot:spring-boot-starter-webmvc")
+
+	// persistence
+	implementation("org.springframework.boot:spring-boot-starter-data-jdbc")
+	implementation("org.springframework.boot:spring-boot-starter-flyway")
+	runtimeOnly("org.xerial:sqlite-jdbc:3.51.2.0")
+
+	// test
 	testImplementation("org.springframework.boot:spring-boot-starter-webmvc-test")
 	testImplementation("org.jetbrains.kotlin:kotlin-test-junit5")
 	testImplementation("org.springframework.shell:spring-shell-starter-test")
