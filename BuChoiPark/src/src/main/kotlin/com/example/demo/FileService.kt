@@ -12,7 +12,8 @@ import java.time.Instant
 @Service
 class FileService(
     private val fileRepository: FileRepository,
-    @Value("\${app.storage.dir}") private val storageDir: String,
+    @Value("\${app.storage.dir}")
+    private val storageDir: String,
 ) {
     fun moveFolder(fromPath: String, toPath: String): Int {
         return fileRepository.updateFilePathsForMoveFolder(fromPath, toPath)
