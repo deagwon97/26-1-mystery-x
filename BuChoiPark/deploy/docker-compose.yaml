@@ -1,7 +1,7 @@
 services:
   server-debug:
     build:
-      context: ../src
+      context: ../
       dockerfile: ../deploy/Dockerfile
       target: builder
     container_name: buchoipark-server-debug

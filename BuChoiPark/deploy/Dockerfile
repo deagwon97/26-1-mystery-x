@@ -5,7 +5,7 @@ ENV JAVA_HOME=/opt/java/openjdk
 
 RUN apt-get update && apt-get install -y curl unzip vim jq sqlite3
 
-COPY build.gradle.kts settings.gradle.kts gradle.properties gradlew ./
+COPY build.gradle.kts settings.gradle.kts gradlew ./
 COPY gradle ./gradle
 RUN chmod +x gradlew && ./gradlew dependencies --no-daemon
 
