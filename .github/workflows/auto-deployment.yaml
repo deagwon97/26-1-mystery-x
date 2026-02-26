@@ -7,7 +7,6 @@ on:
       - '.github/**'
       - 'README.md'
       - 'docs/**'
-      - '../../readme.md'
 
 env:
   IMAGE_NAME: ghcr.io/hyeon9mak/buchoipark

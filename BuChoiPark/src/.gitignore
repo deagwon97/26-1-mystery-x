@@ -1,0 +1,11 @@
+.gradle/
+gradle/
+build/
+out/
+.idea/
+*.iml
+.gradle-user/
+.vscode/
+*.log
+*.db
+uploads/
