@@ -16,12 +16,12 @@ WORKDIR /app/src
 RUN ./gradlew clean bootJar -x test --no-daemon
 
 FROM eclipse-temurin:25-jre
-WORKDIR /app/src
+WORKDIR /app
 
 COPY --from=builder /app/src/build/libs/*.jar app.jar
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=30s CMD curl -f http://localhost:8080/health || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s CMD curl -f http://localhost:8080/actuator/health || exit 1
 
 EXPOSE 8080
 
-ENTRYPOINT ["java","-jar","/app/src/app.jar"]
+ENTRYPOINT ["java","-jar","/app/app.jar"]
