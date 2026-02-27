@@ -1,6 +1,6 @@
-package com.example.demo
+package com.buchoipark.demo
 
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import tools.jackson.module.kotlin.jacksonObjectMapper
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -15,6 +15,7 @@ import org.springframework.web.client.DefaultResponseErrorHandler
 import org.springframework.web.client.RestTemplate
 import org.springframework.util.LinkedMultiValueMap
 import org.springframework.http.ResponseEntity
+import org.springframework.http.client.ClientHttpResponse
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -49,7 +50,7 @@ class FileUploadControllerTests(
 
             val restTemplate = RestTemplate().apply {
                 errorHandler = object : DefaultResponseErrorHandler() {
-                    override fun hasError(response: org.springframework.http.client.ClientHttpResponse): Boolean = false
+                    override fun hasError(response: ClientHttpResponse): Boolean = false
                 }
             }
         val response = restTemplate.postForEntity(
@@ -68,7 +69,7 @@ class FileUploadControllerTests(
         assertThat(tree.get("fileSize")?.asLong()).isEqualTo(fileContent.toByteArray().size.toLong())
 
         val count = jdbcTemplate.queryForObject(
-            "SELECT COUNT(*) FROM file_uploads WHERE id = ? AND user_id = ?",
+            "SELECT COUNT(*) FROM files WHERE id = ? AND user_id = ?",
             Long::class.java,
             id,
             userId,
@@ -76,7 +77,7 @@ class FileUploadControllerTests(
         assertThat(count).isEqualTo(1L)
 
         val storedPath = jdbcTemplate.queryForObject(
-            "SELECT file_path FROM file_uploads WHERE id = ?",
+            "SELECT file_path FROM files WHERE id = ?",
             String::class.java,
             id,
         )
@@ -231,7 +232,7 @@ class FileUploadControllerTests(
         assertThat(moveTree.get("filePath").asText()).isEqualTo("/virtual/moved/move.txt")
 
         val storedPath = jdbcTemplate.queryForObject(
-            "SELECT file_path FROM file_uploads WHERE id = ?",
+            "SELECT file_path FROM files WHERE id = ?",
             String::class.java,
             id,
         )
@@ -288,12 +289,12 @@ class FileUploadControllerTests(
         assertThat(moveResponse.statusCode.value()).isEqualTo(200)
 
         val path1 = jdbcTemplate.queryForObject(
-            "SELECT file_path FROM file_uploads WHERE id = ?",
+            "SELECT file_path FROM files WHERE id = ?",
             String::class.java,
             id1,
         )
         val path2 = jdbcTemplate.queryForObject(
-            "SELECT file_path FROM file_uploads WHERE id = ?",
+            "SELECT file_path FROM files WHERE id = ?",
             String::class.java,
             id2,
         )

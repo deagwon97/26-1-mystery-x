@@ -1,4 +1,4 @@
-package com.example.demo
+package com.buchoipark.demo
 
 import org.springframework.http.ContentDisposition
 import org.springframework.http.HttpHeaders

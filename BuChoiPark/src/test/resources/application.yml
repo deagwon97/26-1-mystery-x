@@ -1,7 +1,7 @@
 spring:
   datasource:
     driver-class-name: org.sqlite.JDBC
-    url: jdbc:sqlite:${SQLITE_DB_PATH:./data/livid.db}
+    url: jdbc:sqlite:file:test?mode=memory&cache=shared
     hikari:
       maximum-pool-size: 1
       minimum-idle: 1
@@ -11,4 +11,4 @@ spring:
 
 app:
   storage:
-    dir: ${APP_STORAGE_DIR:./data/uploads}
+    dir: /tmp/buchoipark-test-uploads

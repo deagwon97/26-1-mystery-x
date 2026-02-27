@@ -24,6 +24,7 @@ extra["springShellVersion"] = "4.0.1"
 dependencies {
 	// 필요할 수 있을 것 같아 미리 추가해둠.
 	//	implementation("org.springframework.shell:spring-shell-starter")
+	//  testImplementation("org.springframework.shell:spring-shell-starter-test")
 	//	runtimeOnly("io.micrometer:micrometer-registry-prometheus")
 
 	// kotlin, jackson
@@ -32,21 +33,21 @@ dependencies {
 
 	// spring web
 	implementation("org.springframework.boot:spring-boot-starter-actuator")
-	implementation("org.springframework.boot:spring-boot-starter-webmvc")
+	implementation("org.springframework.boot:spring-boot-starter-web")
 
 	// persistence
-	implementation("org.springframework.boot:spring-boot-starter-data-jdbc")
-	implementation("org.springframework.boot:spring-boot-starter-flyway")
+	implementation("org.springframework.boot:spring-boot-starter-jdbc")
 	runtimeOnly("org.xerial:sqlite-jdbc:3.51.2.0")
+	implementation("com.github.f4b6a3:uuid-creator:5.3.2")
 
 	// test
-	testImplementation("org.springframework.boot:spring-boot-starter-webmvc-test")
 	testImplementation("org.jetbrains.kotlin:kotlin-test-junit5")
-	testImplementation("org.springframework.shell:spring-shell-starter-test")
-	testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+	testImplementation("org.springframework.boot:spring-boot-starter-test")
+	testImplementation("org.springframework.boot:spring-boot-test-autoconfigure")
 	testImplementation("io.kotest:kotest-runner-junit5:5.9.1")
 	testImplementation("io.kotest:kotest-assertions-core:5.9.1")
 	testImplementation("io.kotest.extensions:kotest-extensions-spring:1.3.0")
+	testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
 dependencyManagement {

@@ -1,4 +1,4 @@
-package com.example.demo
+package com.buchoipark.demo
 
 import com.github.f4b6a3.uuid.UuidCreator
 import org.springframework.beans.factory.annotation.Value
