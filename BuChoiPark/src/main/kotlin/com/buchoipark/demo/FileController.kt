@@ -6,6 +6,7 @@ import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
 import org.springframework.http.MediaTypeFactory
 import org.springframework.http.ResponseEntity
+import org.springframework.web.bind.annotation.DeleteMapping
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
@@ -81,6 +82,23 @@ class FileController(
     @GetMapping("/files")
     fun listFiles(@RequestParam("userId", required = false) userId: String?): List<FileUploadResponse> {
         return fileService.listFiles(userId)
+    }
+
+    @DeleteMapping("/files")
+    fun deleteFile(
+        @RequestParam("userId") userId: String,
+        @RequestParam("filePath") filePath: String,
+    ): ResponseEntity<Map<String, Boolean>> {
+        if (userId.isBlank() || filePath.isBlank()) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).build()
+        }
+
+        val deleted = fileService.deleteFile(userId, filePath)
+        if (!deleted) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).build()
+        }
+
+        return ResponseEntity.ok(mapOf("deleted" to true))
     }
 
     @GetMapping("/files/folder")

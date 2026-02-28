@@ -7,6 +7,28 @@ import org.springframework.stereotype.Repository
 class FileRepository(
     private val jdbcTemplate: JdbcTemplate,
 ) {
+    fun findLatestFileByUserIdAndPath(userId: String, filePath: String): FileUploadResponse? {
+        return jdbcTemplate.query(
+            """
+                SELECT id, user_id, uploaded_at, file_name, file_path, file_size
+                FROM files
+                WHERE user_id = ? AND file_path = ?
+                ORDER BY uploaded_at DESC
+                LIMIT 1
+            """.trimIndent(),
+            rowMapper,
+            userId,
+            filePath,
+        ).firstOrNull()
+    }
+
+    fun deleteFileById(id: String): Int {
+        return jdbcTemplate.update(
+            "DELETE FROM files WHERE id = ?",
+            id,
+        )
+    }
+
     fun listFilesInPathPrefix(userId: String, pathPrefix: String): List<FileUploadResponse> {
         return jdbcTemplate.query(
             """

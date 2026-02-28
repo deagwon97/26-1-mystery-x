@@ -81,8 +81,34 @@ echo "9) 폴더 내 파일 목록 조회:"
 curl -s "http://localhost:8080/files/folder?folderPath=/docs&userId=user-123" | jq
 
 
-# 10)테스트 데이터 정리
-echo "10) 테스트가 완료되었습니다. 다운로드 된 파일을 삭제합니다."
+# 10) 파일 삭제 (userId + filePath)
+echo "10) 파일 삭제(userId + filePath):"
+DELETE_STATUS=$(curl -s -o /tmp/delete_result.json -w "%{http_code}" -X DELETE \
+  "http://localhost:8080/files?userId=user-123&filePath=/docs2/test.txt")
+
+cat /tmp/delete_result.json | jq
+echo "삭제 응답 코드: ${DELETE_STATUS}"
+
+if [[ "$DELETE_STATUS" == "200" ]]; then
+  echo "삭제 API 호출 성공"
+else
+  echo "삭제 API 호출 실패"
+fi
+
+echo "삭제 후 DB 검증(해당 경로 0건 기대):"
+sqlite3 /app/data/sqlite/livid.db "SELECT COUNT(*) FROM files WHERE user_id='user-123' AND file_path='/docs2/test.txt';"
+
+echo "삭제 후 물리 파일 검증(파일 없어야 함):"
+if [[ -f "/app/data/uploads/${FILE_ID}" ]]; then
+  echo "물리 파일이 남아있습니다: /app/data/uploads/${FILE_ID}"
+else
+  echo "물리 파일이 정상 삭제되었습니다."
+fi
+
+
+# 11) 테스트 데이터 정리
+echo "11) 테스트가 완료되었습니다. 다운로드 된 파일을 삭제합니다."
 sqlite3 /app/data/sqlite/livid.db "DELETE FROM files;"
 rm -rf /app/data/uploads/*
 rm -rf ./test.txt
+rm -rf /tmp/delete_result.json

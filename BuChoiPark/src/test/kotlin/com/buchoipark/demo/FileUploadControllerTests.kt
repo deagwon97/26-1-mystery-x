@@ -9,7 +9,9 @@ import org.springframework.boot.test.web.server.LocalServerPort
 import org.springframework.core.io.ByteArrayResource
 import org.springframework.http.HttpEntity
 import org.springframework.http.HttpHeaders
+import org.springframework.http.HttpMethod
 import org.springframework.http.MediaType
+import org.springframework.http.RequestEntity
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.web.client.DefaultResponseErrorHandler
 import org.springframework.web.client.RestTemplate
@@ -18,6 +20,7 @@ import org.springframework.http.ResponseEntity
 import org.springframework.http.client.ClientHttpResponse
 import java.nio.file.Files
 import java.nio.file.Path
+import java.net.URI
 
 @SpringBootTest(
     webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
@@ -194,6 +197,59 @@ class FileUploadControllerTests(
         assertThat(tree[2].get("type").asText()).isEqualTo("FILE")
         assertThat(tree[2].get("name").asText()).isEqualTo("a.txt")
         assertThat(tree[2].get("path").asText()).isEqualTo("/virtual/docs/a.txt")
+    }
+
+    @Test
+    fun `deletes file by user id and file path`() {
+        val restTemplate = RestTemplate().apply {
+            errorHandler = object : DefaultResponseErrorHandler() {
+                override fun hasError(response: org.springframework.http.client.ClientHttpResponse): Boolean = false
+            }
+        }
+
+        val headers = HttpHeaders()
+        headers.contentType = MediaType.MULTIPART_FORM_DATA
+
+        val content = "delete me"
+        val fileResource = object : ByteArrayResource(content.toByteArray()) {
+            override fun getFilename(): String = "delete.txt"
+        }
+
+        val body = LinkedMultiValueMap<String, Any>()
+        body.add("userId", "user-delete")
+        body.add("filePath", "/virtual/delete.txt")
+        body.add("file", fileResource)
+
+        val uploadResponse = restTemplate.postForEntity(
+            "http://localhost:$port/files/upload",
+            HttpEntity(body, headers),
+            String::class.java
+        )
+        assertThat(uploadResponse.statusCode.value()).isEqualTo(200)
+
+        val uploadTree = jacksonObjectMapper().readTree(uploadResponse.body ?: "{}")
+        val id = uploadTree.get("id")?.asText()
+        assertThat(id).isNotNull
+
+        val storedPathOnDisk = Path.of("/tmp/livid-test-uploads", id)
+        assertThat(Files.exists(storedPathOnDisk)).isTrue()
+
+        val deleteUri = URI.create("http://localhost:$port/files?userId=user-delete&filePath=/virtual/delete.txt")
+        val deleteRequest = RequestEntity
+            .method(HttpMethod.DELETE, deleteUri)
+            .build()
+
+        val deleteResponse = restTemplate.exchange(deleteRequest, String::class.java)
+
+        assertThat(deleteResponse.statusCode.value()).isEqualTo(200)
+
+        val count = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM files WHERE id = ?",
+            Long::class.java,
+            id,
+        )
+        assertThat(count).isEqualTo(0L)
+        assertThat(Files.exists(storedPathOnDisk)).isFalse()
     }
 
     @Test
