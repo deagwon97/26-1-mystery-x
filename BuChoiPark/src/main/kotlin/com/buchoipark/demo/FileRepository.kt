@@ -29,6 +29,14 @@ class FileRepository(
         )
     }
 
+    fun deleteFilesByUserAndPathPrefix(userId: String, pathPrefix: String): Int {
+        return jdbcTemplate.update(
+            "DELETE FROM files WHERE user_id = ? AND file_path LIKE ?",
+            userId,
+            "$pathPrefix%",
+        )
+    }
+
     fun listFilesInPathPrefix(userId: String, pathPrefix: String): List<FileUploadResponse> {
         return jdbcTemplate.query(
             """

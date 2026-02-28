@@ -15,6 +15,24 @@ class FileService(
     @Value("\${app.storage.dir}")
     private val storageDir: String,
 ) {
+    fun deleteFolder(userId: String, folderPath: String): Int {
+        val normalizedFolderPath = normalizeFolderPath(folderPath)
+        val pathPrefix = if (normalizedFolderPath == "/") "/" else "$normalizedFolderPath/"
+        val targets = fileRepository.listFilesInPathPrefix(userId, pathPrefix)
+        if (targets.isEmpty()) {
+            return 0
+        }
+
+        val deleted = fileRepository.deleteFilesByUserAndPathPrefix(userId, pathPrefix)
+
+        targets.forEach { file ->
+            val physicalPath = Path.of(storageDir).resolve(file.id)
+            Files.deleteIfExists(physicalPath)
+        }
+
+        return deleted
+    }
+
     fun deleteFile(userId: String, filePath: String): Boolean {
         val normalizedPath = filePath.trim()
         val existing = fileRepository.findLatestFileByUserIdAndPath(userId, normalizedPath) ?: return false

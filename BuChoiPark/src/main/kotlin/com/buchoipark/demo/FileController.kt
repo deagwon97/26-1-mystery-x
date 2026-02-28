@@ -101,6 +101,23 @@ class FileController(
         return ResponseEntity.ok(mapOf("deleted" to true))
     }
 
+    @DeleteMapping("/files/folder")
+    fun deleteFolder(
+        @RequestParam("userId") userId: String,
+        @RequestParam("folderPath") folderPath: String,
+    ): ResponseEntity<Map<String, Int>> {
+        if (userId.isBlank() || folderPath.isBlank()) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).build()
+        }
+
+        val deleted = fileService.deleteFolder(userId, folderPath)
+        if (deleted == 0) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).build()
+        }
+
+        return ResponseEntity.ok(mapOf("deleted" to deleted))
+    }
+
     @GetMapping("/files/folder")
     fun listFolderEntries(
         @RequestParam("userId") userId: String,

@@ -36,6 +36,36 @@ curl -s -X POST "http://localhost:8080/files/upload" \
   -F "filePath=/docs/test3.txt" \
   -F "file=@/app/e2e-test/upload-original/test.txt"
 
+curl -s -X POST "http://localhost:8080/files/upload" \
+  -F "userId=user-123" \
+  -F "filePath=/folderA/file1" \
+  -F "file=@/app/e2e-test/upload-original/test.txt"
+
+curl -s -X POST "http://localhost:8080/files/upload" \
+  -F "userId=user-123" \
+  -F "filePath=/folderA/file2" \
+  -F "file=@/app/e2e-test/upload-original/test.txt"
+
+curl -s -X POST "http://localhost:8080/files/upload" \
+  -F "userId=user-123" \
+  -F "filePath=/folderA/folderB/file3" \
+  -F "file=@/app/e2e-test/upload-original/test.txt"
+
+curl -s -X POST "http://localhost:8080/files/upload" \
+  -F "userId=user-123" \
+  -F "filePath=/folderA/folderB/file4" \
+  -F "file=@/app/e2e-test/upload-original/test.txt"
+
+curl -s -X POST "http://localhost:8080/files/upload" \
+  -F "userId=user-123" \
+  -F "filePath=/folderA/folderB/folderC/file6" \
+  -F "file=@/app/e2e-test/upload-original/test.txt"
+
+curl -s -X POST "http://localhost:8080/files/upload" \
+  -F "userId=user-123" \
+  -F "filePath=/folderA/folderB/folderC/file7" \
+  -F "file=@/app/e2e-test/upload-original/test.txt"
+
 # 3) 전체 목록 조회
 echo "3) 전체 파일 목록:"
 curl -s "http://localhost:8080/files" | jq
@@ -78,7 +108,7 @@ fi
 
 # 9) 폴더 내 파일 목록 조회
 echo "9) 폴더 내 파일 목록 조회:"
-curl -s "http://localhost:8080/files/folder?folderPath=/docs&userId=user-123" | jq
+curl -s "http://localhost:8080/files/folder?folderPath=/folderA&userId=user-123" | jq
 
 
 # 10) 파일 삭제 (userId + filePath)
@@ -106,9 +136,34 @@ else
 fi
 
 
-# 11) 테스트 데이터 정리
-echo "11) 테스트가 완료되었습니다. 다운로드 된 파일을 삭제합니다."
+# 11) 폴더 삭제 (userId + folderPath, 하위 전체 삭제)
+echo "11) 폴더 삭제(userId + folderPath):"
+DELETE_FOLDER_STATUS=$(curl -s -o /tmp/delete_folder_result.json -w "%{http_code}" -X DELETE \
+  "http://localhost:8080/files/folder?userId=user-123&folderPath=/folderA")
+
+cat /tmp/delete_folder_result.json | jq
+echo "폴더 삭제 응답 코드: ${DELETE_FOLDER_STATUS}"
+
+if [[ "$DELETE_FOLDER_STATUS" == "200" ]]; then
+  echo "폴더 삭제 API 호출 성공"
+else
+  echo "폴더 삭제 API 호출 실패"
+fi
+
+echo "폴더 삭제 후 DB 검증(/folderA 하위 0건 기대):"
+sqlite3 /app/data/sqlite/livid.db "SELECT COUNT(*) FROM files WHERE user_id='user-123' AND file_path LIKE '/folderA/%';"
+
+echo "폴더 삭제 후 DB 검증(/docs 하위 2건 유지 기대):"
+sqlite3 /app/data/sqlite/livid.db "SELECT COUNT(*) FROM files WHERE user_id='user-123' AND file_path LIKE '/docs/%';"
+
+echo "폴더 삭제 후 전체 물리 파일 수 검증(2개 기대):"
+find /app/data/uploads -type f | wc -l
+
+
+# 12) 테스트 데이터 정리
+echo "12) 테스트가 완료되었습니다. 다운로드 된 파일을 삭제합니다."
 sqlite3 /app/data/sqlite/livid.db "DELETE FROM files;"
 rm -rf /app/data/uploads/*
 rm -rf ./test.txt
 rm -rf /tmp/delete_result.json
+rm -rf /tmp/delete_folder_result.json

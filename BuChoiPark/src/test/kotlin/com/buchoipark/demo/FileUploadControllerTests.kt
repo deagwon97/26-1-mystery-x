@@ -253,6 +253,86 @@ class FileUploadControllerTests(
     }
 
     @Test
+    fun `deletes folder recursively by user id and folder path`() {
+        val restTemplate = RestTemplate().apply {
+            errorHandler = object : DefaultResponseErrorHandler() {
+                override fun hasError(response: org.springframework.http.client.ClientHttpResponse): Boolean = false
+            }
+        }
+
+        fun uploadFor(userId: String, filePath: String, fileName: String, content: String): String {
+            val headers = HttpHeaders()
+            headers.contentType = MediaType.MULTIPART_FORM_DATA
+
+            val fileResource = object : ByteArrayResource(content.toByteArray()) {
+                override fun getFilename(): String = fileName
+            }
+
+            val body = LinkedMultiValueMap<String, Any>()
+            body.add("userId", userId)
+            body.add("filePath", filePath)
+            body.add("file", fileResource)
+
+            val response = restTemplate.postForEntity(
+                "http://localhost:$port/files/upload",
+                HttpEntity(body, headers),
+                String::class.java
+            )
+            assertThat(response.statusCode.value()).isEqualTo(200)
+
+            val tree = jacksonObjectMapper().readTree(response.body ?: "{}")
+            return tree.get("id").asText()
+        }
+
+        val deletedId1 = uploadFor("user-folder-delete", "/virtual/docs/a.txt", "a.txt", "aaa")
+        val deletedId2 = uploadFor("user-folder-delete", "/virtual/docs/sub/b.txt", "b.txt", "bbb")
+        val deletedId3 = uploadFor("user-folder-delete", "/virtual/docs/sub2/c.txt", "c.txt", "ccc")
+        val keptId = uploadFor("user-folder-delete", "/virtual/other/d.txt", "d.txt", "ddd")
+        uploadFor("another-user", "/virtual/docs/e.txt", "e.txt", "eee")
+
+        assertThat(Files.exists(Path.of("/tmp/livid-test-uploads", deletedId1))).isTrue()
+        assertThat(Files.exists(Path.of("/tmp/livid-test-uploads", deletedId2))).isTrue()
+        assertThat(Files.exists(Path.of("/tmp/livid-test-uploads", deletedId3))).isTrue()
+        assertThat(Files.exists(Path.of("/tmp/livid-test-uploads", keptId))).isTrue()
+
+        val deleteUri = URI.create("http://localhost:$port/files/folder?userId=user-folder-delete&folderPath=/virtual/docs")
+        val deleteRequest = RequestEntity
+            .method(HttpMethod.DELETE, deleteUri)
+            .build()
+
+        val deleteResponse = restTemplate.exchange(deleteRequest, String::class.java)
+        assertThat(deleteResponse.statusCode.value()).isEqualTo(200)
+
+        val deletedCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM files WHERE user_id = ? AND file_path LIKE ?",
+            Long::class.java,
+            "user-folder-delete",
+            "/virtual/docs/%",
+        )
+        assertThat(deletedCount).isEqualTo(0L)
+
+        val keptCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM files WHERE id = ?",
+            Long::class.java,
+            keptId,
+        )
+        assertThat(keptCount).isEqualTo(1L)
+
+        val anotherUserCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM files WHERE user_id = ? AND file_path LIKE ?",
+            Long::class.java,
+            "another-user",
+            "/virtual/docs/%",
+        )
+        assertThat(anotherUserCount).isEqualTo(1L)
+
+        assertThat(Files.exists(Path.of("/tmp/livid-test-uploads", deletedId1))).isFalse()
+        assertThat(Files.exists(Path.of("/tmp/livid-test-uploads", deletedId2))).isFalse()
+        assertThat(Files.exists(Path.of("/tmp/livid-test-uploads", deletedId3))).isFalse()
+        assertThat(Files.exists(Path.of("/tmp/livid-test-uploads", keptId))).isTrue()
+    }
+
+    @Test
     fun `downloads file by id`() {
         val restTemplate = RestTemplate().apply {
             errorHandler = object : DefaultResponseErrorHandler() {
