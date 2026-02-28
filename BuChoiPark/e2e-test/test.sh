@@ -10,58 +10,79 @@ if [[ "$answer" != "y" ]]; then
 fi
 
 # 0) DB 초기화 (개발용)
+echo "0) DB 초기화 및 업로드된 파일 삭제:"
 sqlite3 /app/data/sqlite/livid.db "DELETE FROM files;"
 rm -rf /app/data/uploads/*
 rm -rf ./test.txt
 
 # 1) 업로드
+echo "1) 파일 업로드:"
 UPLOAD_RES=$(curl -s -X POST "http://localhost:8080/files/upload" \
   -F "userId=user-123" \
   -F "filePath=/docs/test.txt" \
-  -F "file=@/app/src/e2e-test/upload-original/test.txt")
-
-echo "$UPLOAD_RES"
+  -F "file=@/app/e2e-test/upload-original/test.txt")
+echo "$UPLOAD_RES" | jq
 
 # 2) 업로드 응답에서 id 추출 (jq 필요)
 FILE_ID=$(echo "$UPLOAD_RES" | jq -r '.id')
 
+curl -s -X POST "http://localhost:8080/files/upload" \
+  -F "userId=user-123" \
+  -F "filePath=/docs/test2.txt" \
+  -F "file=@/app/e2e-test/upload-original/test.txt"
+
+curl -s -X POST "http://localhost:8080/files/upload" \
+  -F "userId=user-123" \
+  -F "filePath=/docs/test3.txt" \
+  -F "file=@/app/e2e-test/upload-original/test.txt"
+
 # 3) 전체 목록 조회
-echo "전체 파일 목록:"
+echo "3) 전체 파일 목록:"
 curl -s "http://localhost:8080/files" | jq
 
 # 4) 사용자 필터 목록 조회
-echo "사용자 필터 목록:"
+echo "4) 사용자 필터 목록:"
 curl -s "http://localhost:8080/files?userId=user-123" | jq -r '.[0].id'
 
 # 5) 다운로드
+echo "5) 파일 다운로드:"
 curl -OJ "http://localhost:8080/files/${FILE_ID}/download" 
 
 # 6) 파일 이동 (메타데이터만 변경, 폴더 경로만 지정해도 파일명 자동 보정)
-echo "파일 이동:"
+echo "6) 파일 이동:"
 curl -s -X POST "http://localhost:8080/files/${FILE_ID}/move" \
   -H "Content-Type: application/json" \
-  -d '{"filePath":"/virtual/moved/"}'
+  -d '{"filePath":"/virtual/moved/"}' | jq
 
 echo "업데이트 후 전체 파일 목록:"
 curl -s "http://localhost:8080/files" | jq
 
 
 # 7) 폴더 이동 (prefix 기반 일괄 변경)
-echo "폴더 이동:"
+echo "7) 폴더 이동:"
 curl -s -X POST "http://localhost:8080/files/move-folder" \
   -H "Content-Type: application/json" \
-  -d '{"fromPath":"/virtual/moved","toPath":"/docs2"}'
+  -d '{"fromPath":"/virtual/moved","toPath":"/docs2"}' | jq 
 
 echo "업데이트 후 전체 파일 목록:"
 curl -s "http://localhost:8080/files" | jq
 
-# 다운로드된 파일과 원본 데이터가 일치하는지 확인
-echo "다운로드된 파일과 원본 데이터가 일치하는지 확인:"
-if cmp -s "./test.txt" "/app/src/e2e-test/upload-original/test.txt"; then
+
+# 8) 다운로드된 파일과 원본 데이터가 일치하는지 확인
+echo "8) 다운로드된 파일과 원본 데이터가 일치하는지 확인:"
+if cmp -s "./test.txt" "/app/e2e-test/upload-original/test.txt"; then
   echo "파일이 일치합니다."
 else
   echo "파일이 일치하지 않습니다."
 fi
 
-echo "테스트가 완료되었습니다. 다운로드 된 파일을 삭제합니다."
+# 9) 폴더 내 파일 목록 조회
+echo "9) 폴더 내 파일 목록 조회:"
+curl -s "http://localhost:8080/files/folder?folderPath=/docs&userId=user-123" | jq
+
+
+# 10)테스트 데이터 정리
+echo "10) 테스트가 완료되었습니다. 다운로드 된 파일을 삭제합니다."
+sqlite3 /app/data/sqlite/livid.db "DELETE FROM files;"
+rm -rf /app/data/uploads/*
 rm -rf ./test.txt
