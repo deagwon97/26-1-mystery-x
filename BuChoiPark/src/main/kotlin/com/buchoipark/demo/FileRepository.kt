@@ -7,6 +7,20 @@ import org.springframework.stereotype.Repository
 class FileRepository(
     private val jdbcTemplate: JdbcTemplate,
 ) {
+    fun listFilesInPathPrefix(userId: String, pathPrefix: String): List<FileUploadResponse> {
+        return jdbcTemplate.query(
+            """
+                SELECT id, user_id, uploaded_at, file_name, file_path, file_size
+                FROM files
+                WHERE user_id = ? AND file_path LIKE ?
+                ORDER BY file_path ASC
+            """.trimIndent(),
+            rowMapper,
+            userId,
+            "$pathPrefix%",
+        )
+    }
+
     fun updateFilePathsForMoveFolder(fromPath: String, toPath: String): Int {
         return jdbcTemplate.update(
             """

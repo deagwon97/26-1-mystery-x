@@ -1,6 +1,6 @@
 package com.buchoipark.demo
 
-import tools.jackson.module.kotlin.jacksonObjectMapper
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -138,6 +138,62 @@ class FileUploadControllerTests(
         assertThat(filteredTree.isArray).isTrue
         assertThat(filteredTree.size()).isEqualTo(1)
         assertThat(filteredTree[0].get("userId").asText()).isEqualTo("user-a")
+    }
+
+    @Test
+    fun `lists files and folders inside a folder`() {
+        val restTemplate = RestTemplate().apply {
+            errorHandler = object : DefaultResponseErrorHandler() {
+                override fun hasError(response: org.springframework.http.client.ClientHttpResponse): Boolean = false
+            }
+        }
+
+        fun uploadFor(userId: String, filePath: String, fileName: String, content: String) {
+            val headers = HttpHeaders()
+            headers.contentType = MediaType.MULTIPART_FORM_DATA
+
+            val fileResource = object : ByteArrayResource(content.toByteArray()) {
+                override fun getFilename(): String = fileName
+            }
+
+            val body = LinkedMultiValueMap<String, Any>()
+            body.add("userId", userId)
+            body.add("filePath", filePath)
+            body.add("file", fileResource)
+
+            val response = restTemplate.postForEntity(
+                "http://localhost:$port/files/upload",
+                HttpEntity(body, headers),
+                String::class.java
+            )
+            assertThat(response.statusCode.value()).isEqualTo(200)
+        }
+
+        uploadFor("user-folder-list", "/virtual/docs/a.txt", "a.txt", "aaa")
+        uploadFor("user-folder-list", "/virtual/docs/sub/b.txt", "b.txt", "bbb")
+        uploadFor("user-folder-list", "/virtual/docs/sub2/c.txt", "c.txt", "ccc")
+        uploadFor("user-folder-list", "/virtual/other/d.txt", "d.txt", "ddd")
+        uploadFor("another-user", "/virtual/docs/e.txt", "e.txt", "eee")
+
+        val response = restTemplate.getForEntity(
+            "http://localhost:$port/files/folder?userId=user-folder-list&folderPath=/virtual/docs",
+            String::class.java
+        )
+
+        assertThat(response.statusCode.value()).isEqualTo(200)
+        val tree = jacksonObjectMapper().readTree(response.body ?: "[]")
+        assertThat(tree.isArray).isTrue
+        assertThat(tree.size()).isEqualTo(3)
+
+        assertThat(tree[0].get("type").asText()).isEqualTo("FOLDER")
+        assertThat(tree[0].get("name").asText()).isEqualTo("sub")
+
+        assertThat(tree[1].get("type").asText()).isEqualTo("FOLDER")
+        assertThat(tree[1].get("name").asText()).isEqualTo("sub2")
+
+        assertThat(tree[2].get("type").asText()).isEqualTo("FILE")
+        assertThat(tree[2].get("name").asText()).isEqualTo("a.txt")
+        assertThat(tree[2].get("path").asText()).isEqualTo("/virtual/docs/a.txt")
     }
 
     @Test

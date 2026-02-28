@@ -83,6 +83,18 @@ class FileController(
         return fileService.listFiles(userId)
     }
 
+    @GetMapping("/files/folder")
+    fun listFolderEntries(
+        @RequestParam("userId") userId: String,
+        @RequestParam("folderPath") folderPath: String,
+    ): ResponseEntity<List<FolderEntryResponse>> {
+        if (userId.isBlank() || folderPath.isBlank()) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).build()
+        }
+
+        return ResponseEntity.ok(fileService.listFolderEntries(userId, folderPath))
+    }
+
     @PostMapping("/files/upload")
     fun uploadFile(
         @RequestParam("userId") userId: String,

@@ -15,6 +15,56 @@ class FileService(
     @Value("\${app.storage.dir}")
     private val storageDir: String,
 ) {
+    fun listFolderEntries(userId: String, folderPath: String): List<FolderEntryResponse> {
+        val normalizedFolderPath = normalizeFolderPath(folderPath)
+        val pathPrefix = if (normalizedFolderPath == "/") "/" else "$normalizedFolderPath/"
+        val files = fileRepository.listFilesInPathPrefix(userId, pathPrefix)
+
+        val folderEntries = linkedMapOf<String, FolderEntryResponse>()
+        val fileEntries = mutableListOf<FolderEntryResponse>()
+
+        for (file in files) {
+            val remainder = file.filePath.removePrefix(pathPrefix)
+            if (remainder.isBlank()) {
+                continue
+            }
+
+            val slashIndex = remainder.indexOf('/')
+            if (slashIndex >= 0) {
+                val childFolderName = remainder.substring(0, slashIndex)
+                if (childFolderName.isBlank()) {
+                    continue
+                }
+
+                if (!folderEntries.containsKey(childFolderName)) {
+                    val childFolderPath = if (normalizedFolderPath == "/") {
+                        "/$childFolderName"
+                    } else {
+                        "$normalizedFolderPath/$childFolderName"
+                    }
+                    folderEntries[childFolderName] = FolderEntryResponse(
+                        type = "FOLDER",
+                        name = childFolderName,
+                        path = childFolderPath,
+                    )
+                }
+            } else {
+                fileEntries.add(
+                    FolderEntryResponse(
+                        type = "FILE",
+                        name = file.fileName,
+                        path = file.filePath,
+                        id = file.id,
+                        fileSize = file.fileSize,
+                        uploadedAt = file.uploadedAt,
+                    )
+                )
+            }
+        }
+
+        return folderEntries.values.sortedBy { it.name } + fileEntries.sortedBy { it.name }
+    }
+
     fun moveFolder(fromPath: String, toPath: String): Int {
         return fileRepository.updateFilePathsForMoveFolder(fromPath, toPath)
     }
@@ -85,10 +135,27 @@ class FileService(
             trimmed
         }
     }
+
+    private fun normalizeFolderPath(path: String): String {
+        val trimmed = path.trim()
+        if (trimmed == "/") {
+            return "/"
+        }
+        return trimmed.trimEnd('/').ifBlank { "/" }
+    }
 }
 
 data class FileDownload(
     val path: Path,
     val fileName: String,
     val fileSize: Long,
+)
+
+data class FolderEntryResponse(
+    val type: String,
+    val name: String,
+    val path: String,
+    val id: String? = null,
+    val fileSize: Long? = null,
+    val uploadedAt: String? = null,
 )
