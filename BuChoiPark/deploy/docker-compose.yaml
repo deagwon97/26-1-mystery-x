@@ -9,6 +9,13 @@ services:
       - SPRING_PROFILES_ACTIVE=debug
       - SQLITE_DB_PATH=/app/data/sqlite/livid.db
       - APP_STORAGE_DIR=/app/data/uploads
+      - SPRING_SERVLET_MULTIPART_MAX_FILE_SIZE=512MB
+      - SPRING_SERVLET_MULTIPART_MAX_REQUEST_SIZE=512MB
+      - APP_UPLOAD_MAX_CONCURRENCY=8
+      - APP_UPLOAD_ACQUIRE_TIMEOUT_MS=100
+      - APP_UPLOAD_MAX_INFLIGHT_BYTES=1073741824
+      - APP_DOWNLOAD_MAX_CONCURRENCY=24
+      - APP_DOWNLOAD_RATE_LIMIT_RPS=12
     volumes:
       - ../data/sqlite:/app/data/sqlite
       - ../data/uploads:/app/data/uploads
@@ -16,4 +23,29 @@ services:
       - ../e2e-test:/app/e2e-test
     stdin_open: true
     tty: true
+    cpus: "2.0"
+    mem_limit: 4g
     restart: unless-stopped
+
+  loadtest:
+    image: golang:1.24-bookworm
+    container_name: buchoipark-loadtest
+    working_dir: /work
+    environment:
+      - TARGET_BASE_URL=http://server-debug:8080
+      - SQLITE_DB_PATH=/work/data/sqlite/livid.db
+      - APP_STORAGE_DIR=/work/data/uploads
+    volumes:
+      - ../loadtest:/work/loadtest
+      - ../data/sqlite:/work/data/sqlite
+      - ../data/uploads:/work/data/uploads
+      - ../e2e-test/upload-original:/work/testdata
+    depends_on:
+      - server-debug
+    stdin_open: true
+    tty: true
+    command: "bash -c 'tail -f /dev/null'"
+    cpus: "16.0"
+    mem_limit: 32g
+    restart: unless-stopped
+

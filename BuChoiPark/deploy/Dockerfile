@@ -18,7 +18,7 @@ RUN ./gradlew clean bootJar -x test --no-daemon
 FROM eclipse-temurin:25-jre
 WORKDIR /app
 
-COPY --from=builder /app/src/build/libs/*.jar app.jar
+COPY --from=builder /app/build/libs/*.jar app.jar
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s CMD curl -f http://localhost:8080/actuator/health || exit 1
 
