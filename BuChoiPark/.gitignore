@@ -46,4 +46,4 @@ out/
 data/
 
 ## log, report
-.log, .csv
+*.log, *.csv

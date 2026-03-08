@@ -12,7 +12,7 @@ fi
 # 0) DB 초기화 (개발용)
 echo "0) DB 초기화 및 업로드된 파일 삭제:"
 sqlite3 /app/data/sqlite/livid.db "DELETE FROM files;"
-rm -rf /app/data/uploads/*
+find /app/data/uploads -mindepth 1 -delete
 rm -rf ./test.txt
 
 # 1) 업로드
@@ -163,7 +163,7 @@ find /app/data/uploads -type f | wc -l
 # 12) 테스트 데이터 정리
 echo "12) 테스트가 완료되었습니다. 다운로드 된 파일을 삭제합니다."
 sqlite3 /app/data/sqlite/livid.db "DELETE FROM files;"
-rm -rf /app/data/uploads/*
+find /app/data/uploads -mindepth 1 -delete
 rm -rf ./test.txt
 rm -rf /tmp/delete_result.json
 rm -rf /tmp/delete_folder_result.json
