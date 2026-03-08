@@ -47,3 +47,4 @@ data/
 
 ## log, report
 *.log, *.csv
+results

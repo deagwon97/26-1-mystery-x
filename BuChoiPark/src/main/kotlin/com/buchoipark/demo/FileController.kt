@@ -14,13 +14,16 @@ import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
+import org.springframework.web.context.request.async.DeferredResult
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody
 import org.springframework.web.multipart.MultipartFile
 import jakarta.servlet.http.HttpServletRequest
 import java.nio.file.Files
+import java.util.ArrayDeque
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Semaphore
-import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
@@ -29,18 +32,26 @@ class FileController(
     private val fileService: FileService,
     @Value("\${app.download.max-concurrency:80}")
     private val maxDownloadConcurrency: Int,
-    @Value("\${app.download.acquire-timeout-ms:75}")
-    private val downloadAcquireTimeoutMs: Long,
     @Value("\${app.download.rate-limit.enabled:true}")
     private val downloadRateLimitEnabled: Boolean,
     @Value("\${app.download.rate-limit.requests-per-second:30}")
     private val downloadRateLimitRps: Int,
+    @Value("\${app.download.max-queue-bytes:1073741824}")
+    private val downloadMaxQueueBytes: Long,
+    @Value("\${app.download.max-queue-requests:1000}")
+    private val downloadMaxQueueRequests: Int,
+    @Value("\${app.download.queue-timeout-ms:10000}")
+    private val downloadQueueTimeoutMs: Long,
     @Value("\${app.upload.max-concurrency:16}")
     private val uploadMaxConcurrency: Int,
-    @Value("\${app.upload.acquire-timeout-ms:75}")
-    private val uploadAcquireTimeoutMs: Long,
     @Value("\${app.upload.max-inflight-bytes:2147483648}")
     private val uploadMaxInflightBytes: Long,
+    @Value("\${app.upload.max-queue-bytes:1073741824}")
+    private val uploadMaxQueueBytes: Long,
+    @Value("\${app.upload.max-queue-requests:1000}")
+    private val uploadMaxQueueRequests: Int,
+    @Value("\${app.upload.queue-timeout-ms:10000}")
+    private val uploadQueueTimeoutMs: Long,
 ) {
     // 느린 다운로드 클라이언트를 위한 벌크헤드입니다.
     // 다운로드 포화가 같은 서버의 경량 API 스레드를 잠식하지 않도록 보호합니다.
@@ -53,6 +64,15 @@ class FileController(
     }
     private val uploadSemaphore by lazy { Semaphore(uploadMaxConcurrency, true) }
     private val uploadInFlightLimiter by lazy { InFlightByteLimiter(uploadMaxInflightBytes) }
+    private val uploadQueueLock = Any()
+    private val uploadQueue = ArrayDeque<QueuedUploadRequest>()
+    private val uploadQueuedCount = AtomicInteger(0)
+    private val uploadQueueBytesLimiter by lazy { InFlightByteLimiter(uploadMaxQueueBytes) }
+    private val uploadDrainInProgress = AtomicBoolean(false)
+    private val downloadQueue = ConcurrentLinkedQueue<QueuedDownloadRequest>()
+    private val downloadQueuedCount = AtomicInteger(0)
+    private val downloadQueueBytesLimiter by lazy { InFlightByteLimiter(downloadMaxQueueBytes) }
+    private val downloadDrainInProgress = AtomicBoolean(false)
 
     @GetMapping("/health")
     fun health(): ResponseEntity<Map<String, String>> {
@@ -95,26 +115,124 @@ class FileController(
     fun downloadFile(
         @PathVariable("id") id: String,
         request: HttpServletRequest,
-    ): ResponseEntity<StreamingResponseBody> {
+    ): DeferredResult<ResponseEntity<StreamingResponseBody>> {
+        val deferredResult = DeferredResult<ResponseEntity<StreamingResponseBody>>(downloadQueueTimeoutMs)
+
         if (downloadRateLimitEnabled) {
             val key = resolveClientKey(request)
             if (!downloadRateLimiter.allow(key)) {
-                return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
-                    .header("Retry-After", "1")
-                    .build()
+                deferredResult.setResult(
+                    ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                        .header("Retry-After", "1")
+                        .build()
+                )
+                return deferredResult
             }
         }
 
         val download = fileService.getDownloadFile(id)
-            ?: return ResponseEntity.status(HttpStatus.NOT_FOUND).build()
+            ?: run {
+                deferredResult.setResult(ResponseEntity.status(HttpStatus.NOT_FOUND).build())
+                return deferredResult
+            }
 
-        // 장시간 다운로드가 너무 많으면 즉시 백프레셔를 반환합니다.
-        // 이는 내부 장애가 아니라 의도적인 보호 동작입니다.
-        if (!downloadSemaphore.tryAcquire(downloadAcquireTimeoutMs, TimeUnit.MILLISECONDS)) {
-            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                .header("Retry-After", "1")
-                .build()
+        // 큐가 비어 있고 permit이 즉시 가능할 때만 바로 실행해 대기 지연을 줄입니다.
+        if (downloadQueuedCount.get() == 0 && downloadSemaphore.tryAcquire()) {
+            completeDownload(deferredResult, download)
+            return deferredResult
         }
+
+        val queueReservedBytes = download.fileSize.coerceAtLeast(0)
+        if (!downloadQueueBytesLimiter.tryAcquire(queueReservedBytes)) {
+            setDownloadUnavailable(deferredResult)
+            return deferredResult
+        }
+
+        if (downloadQueuedCount.incrementAndGet() > downloadMaxQueueRequests) {
+            downloadQueuedCount.decrementAndGet()
+            downloadQueueBytesLimiter.release(queueReservedBytes)
+            setDownloadUnavailable(deferredResult)
+            return deferredResult
+        }
+
+        val queuedRequest = QueuedDownloadRequest(
+            download = download,
+            deferredResult = deferredResult,
+            reservedBytes = queueReservedBytes,
+        )
+        downloadQueue.offer(queuedRequest)
+
+        deferredResult.onTimeout {
+            if (cancelQueuedRequest(queuedRequest)) {
+                setDownloadUnavailable(deferredResult)
+            }
+        }
+        deferredResult.onError {
+            cancelQueuedRequest(queuedRequest)
+        }
+
+        drainDownloadQueue()
+        return deferredResult
+    }
+
+    private fun cancelQueuedRequest(request: QueuedDownloadRequest): Boolean {
+        if (!request.active.compareAndSet(true, false)) {
+            return false
+        }
+
+        val removed = downloadQueue.remove(request)
+        if (removed) {
+            downloadQueuedCount.decrementAndGet()
+            downloadQueueBytesLimiter.release(request.reservedBytes)
+        }
+        return removed
+    }
+
+    private fun drainDownloadQueue() {
+        if (!downloadDrainInProgress.compareAndSet(false, true)) {
+            return
+        }
+
+        try {
+            while (true) {
+                if (!downloadSemaphore.tryAcquire()) {
+                    return
+                }
+
+                val next = pollNextQueuedDownload()
+                if (next == null) {
+                    downloadSemaphore.release()
+                    return
+                }
+
+                completeDownload(next.deferredResult, next.download)
+            }
+        } finally {
+            downloadDrainInProgress.set(false)
+            // drain loop 종료 직전에 새 요청이 들어온 경우를 놓치지 않도록 한 번 더 확인합니다.
+            if (downloadQueuedCount.get() > 0 && downloadSemaphore.availablePermits() > 0) {
+                drainDownloadQueue()
+            }
+        }
+    }
+
+    private fun pollNextQueuedDownload(): QueuedDownloadRequest? {
+        while (true) {
+            val next = downloadQueue.poll() ?: return null
+            if (!next.active.compareAndSet(true, false)) {
+                continue
+            }
+
+            downloadQueuedCount.decrementAndGet()
+            downloadQueueBytesLimiter.release(next.reservedBytes)
+            return next
+        }
+    }
+
+    private fun completeDownload(
+        deferredResult: DeferredResult<ResponseEntity<StreamingResponseBody>>,
+        download: FileDownload,
+    ) {
 
         val mediaType = MediaTypeFactory.getMediaType(download.fileName)
             .orElse(MediaType.APPLICATION_OCTET_STREAM)
@@ -138,9 +256,26 @@ class FileController(
             .filename(download.fileName)
             .build()
 
-        return ResponseEntity.ok()
+        val response = ResponseEntity.ok()
             .headers(headers)
             .body(body)
+
+        val accepted = deferredResult.setResult(response)
+        if (!accepted) {
+            // timeout/취소로 결과 전달에 실패했다면 permit을 즉시 반환합니다.
+            downloadSemaphore.release()
+            drainDownloadQueue()
+        }
+    }
+
+    private fun setDownloadUnavailable(deferredResult: DeferredResult<ResponseEntity<StreamingResponseBody>>) {
+        if (!deferredResult.hasResult()) {
+            deferredResult.setResult(
+                ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .header("Retry-After", "1")
+                    .build()
+            )
+        }
     }
 
     @GetMapping("/files")
@@ -199,41 +334,189 @@ class FileController(
         @RequestParam("userId") userId: String,
         @RequestParam("filePath") filePath: String,
         @RequestParam("file") file: MultipartFile,
-    ): ResponseEntity<FileUploadResponse> {
+    ): DeferredResult<ResponseEntity<FileUploadResponse>> {
+        val deferredResult = DeferredResult<ResponseEntity<FileUploadResponse>>(uploadQueueTimeoutMs)
+
         if (userId.isBlank()) {
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).build()
+            deferredResult.setResult(ResponseEntity.status(HttpStatus.BAD_REQUEST).build())
+            return deferredResult
         }
         if (filePath.isBlank()) {
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).build()
+            deferredResult.setResult(ResponseEntity.status(HttpStatus.BAD_REQUEST).build())
+            return deferredResult
         }
         if (file.isEmpty) {
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).build()
+            deferredResult.setResult(ResponseEntity.status(HttpStatus.BAD_REQUEST).build())
+            return deferredResult
         }
 
-        if (!uploadSemaphore.tryAcquire(uploadAcquireTimeoutMs, TimeUnit.MILLISECONDS)) {
-            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                .header("Retry-After", "1")
-                .build()
+        val inFlightBytes = file.size.coerceAtLeast(0)
+
+        // 대기열이 없을 때만 즉시 실행해 불필요한 큐잉 지연을 피합니다.
+        if (uploadQueuedCount.get() == 0 && uploadSemaphore.tryAcquire() && uploadInFlightLimiter.tryAcquire(inFlightBytes)) {
+            completeUpload(deferredResult, userId, filePath, file, inFlightBytes)
+            return deferredResult
         }
 
-        val reservedBytes = if (file.size > 0) file.size else 0L
-        if (!uploadInFlightLimiter.tryAcquire(reservedBytes)) {
-            uploadSemaphore.release()
-            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                .header("Retry-After", "1")
-                .build()
+        val queueReservedBytes = inFlightBytes
+        if (!uploadQueueBytesLimiter.tryAcquire(queueReservedBytes)) {
+            setUploadUnavailable(deferredResult)
+            return deferredResult
+        }
+
+        if (uploadQueuedCount.incrementAndGet() > uploadMaxQueueRequests) {
+            uploadQueuedCount.decrementAndGet()
+            uploadQueueBytesLimiter.release(queueReservedBytes)
+            setUploadUnavailable(deferredResult)
+            return deferredResult
+        }
+
+        val queuedRequest = QueuedUploadRequest(
+            userId = userId,
+            filePath = filePath,
+            file = file,
+            deferredResult = deferredResult,
+            reservedBytes = queueReservedBytes,
+            inFlightBytes = inFlightBytes,
+        )
+
+        synchronized(uploadQueueLock) {
+            uploadQueue.addLast(queuedRequest)
+        }
+
+        deferredResult.onTimeout {
+            if (cancelQueuedUpload(queuedRequest)) {
+                setUploadUnavailable(deferredResult)
+            }
+        }
+        deferredResult.onError {
+            cancelQueuedUpload(queuedRequest)
+        }
+
+        drainUploadQueue()
+        return deferredResult
+    }
+
+    private fun cancelQueuedUpload(request: QueuedUploadRequest): Boolean {
+        if (!request.active.compareAndSet(true, false)) {
+            return false
+        }
+
+        val removed = synchronized(uploadQueueLock) {
+            uploadQueue.remove(request)
+        }
+        if (removed) {
+            uploadQueuedCount.decrementAndGet()
+            uploadQueueBytesLimiter.release(request.reservedBytes)
+        }
+        return removed
+    }
+
+    private fun drainUploadQueue() {
+        if (!uploadDrainInProgress.compareAndSet(false, true)) {
+            return
         }
 
         try {
+            while (true) {
+                val next = pollNextQueuedUploadReady() ?: return
+                completeUpload(
+                    deferredResult = next.deferredResult,
+                    userId = next.userId,
+                    filePath = next.filePath,
+                    file = next.file,
+                    inFlightBytes = next.inFlightBytes,
+                )
+            }
+        } finally {
+            uploadDrainInProgress.set(false)
+            if (uploadQueuedCount.get() > 0 && uploadSemaphore.availablePermits() > 0) {
+                drainUploadQueue()
+            }
+        }
+    }
+
+    private fun pollNextQueuedUploadReady(): QueuedUploadRequest? {
+        synchronized(uploadQueueLock) {
+            while (uploadQueue.isNotEmpty()) {
+                val next = uploadQueue.first()
+                if (!next.active.get()) {
+                    uploadQueue.removeFirst()
+                    continue
+                }
+
+                if (!uploadSemaphore.tryAcquire()) {
+                    return null
+                }
+                if (!uploadInFlightLimiter.tryAcquire(next.inFlightBytes)) {
+                    uploadSemaphore.release()
+                    return null
+                }
+
+                uploadQueue.removeFirst()
+                if (!next.active.compareAndSet(true, false)) {
+                    uploadSemaphore.release()
+                    uploadInFlightLimiter.release(next.inFlightBytes)
+                    continue
+                }
+
+                uploadQueuedCount.decrementAndGet()
+                uploadQueueBytesLimiter.release(next.reservedBytes)
+                return next
+            }
+        }
+        return null
+    }
+
+    private fun completeUpload(
+        deferredResult: DeferredResult<ResponseEntity<FileUploadResponse>>,
+        userId: String,
+        filePath: String,
+        file: MultipartFile,
+        inFlightBytes: Long,
+    ) {
+        try {
             val response = fileService.uploadFile(userId, filePath, file)
 
-            return ResponseEntity.ok(response)
+            deferredResult.setResult(ResponseEntity.ok(response))
+        } catch (_: Exception) {
+            if (!deferredResult.hasResult()) {
+                deferredResult.setResult(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build())
+            }
         } finally {
-            uploadInFlightLimiter.release(reservedBytes)
+            uploadInFlightLimiter.release(inFlightBytes)
             uploadSemaphore.release()
+            drainUploadQueue()
+        }
+    }
+
+    private fun setUploadUnavailable(deferredResult: DeferredResult<ResponseEntity<FileUploadResponse>>) {
+        if (!deferredResult.hasResult()) {
+            deferredResult.setResult(
+                ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .header("Retry-After", "1")
+                    .build()
+            )
         }
     }
 }
+
+private data class QueuedDownloadRequest(
+    val download: FileDownload,
+    val deferredResult: DeferredResult<ResponseEntity<StreamingResponseBody>>,
+    val reservedBytes: Long,
+    val active: AtomicBoolean = AtomicBoolean(true),
+)
+
+private data class QueuedUploadRequest(
+    val userId: String,
+    val filePath: String,
+    val file: MultipartFile,
+    val deferredResult: DeferredResult<ResponseEntity<FileUploadResponse>>,
+    val reservedBytes: Long,
+    val inFlightBytes: Long,
+    val active: AtomicBoolean = AtomicBoolean(true),
+)
 
 private fun resolveClientKey(request: HttpServletRequest): String {
     val xff = request.getHeader("X-Forwarded-For")

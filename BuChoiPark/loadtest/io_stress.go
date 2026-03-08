@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -31,16 +32,23 @@ type endpointStat struct {
 	errors     int64
 	bytes      int64
 	statusCode map[int]int64
+	zeroKinds  map[string]int64
 }
 
 func newEndpointStat() *endpointStat {
-	return &endpointStat{statusCode: make(map[int]int64)}
+	return &endpointStat{
+		statusCode: make(map[int]int64),
+		zeroKinds:  make(map[string]int64),
+	}
 }
 
-func (s *endpointStat) add(latency time.Duration, status int, payloadBytes int64, isError bool) {
+func (s *endpointStat) add(latency time.Duration, status int, payloadBytes int64, isError bool, zeroKind string) {
 	s.mu.Lock()
 	s.latencies = append(s.latencies, latency)
 	s.statusCode[status]++
+	if status == 0 && zeroKind != "" {
+		s.zeroKinds[zeroKind]++
+	}
 	s.mu.Unlock()
 	atomic.AddInt64(&s.count, 1)
 	atomic.AddInt64(&s.bytes, payloadBytes)
@@ -49,7 +57,7 @@ func (s *endpointStat) add(latency time.Duration, status int, payloadBytes int64
 	}
 }
 
-func (s *endpointStat) summary() (count int64, errors int64, totalBytes int64, p95 time.Duration, p99 time.Duration, codes map[int]int64) {
+func (s *endpointStat) summary() (count int64, errors int64, totalBytes int64, p95 time.Duration, p99 time.Duration, codes map[int]int64, zeroKinds map[string]int64) {
 	count = atomic.LoadInt64(&s.count)
 	errors = atomic.LoadInt64(&s.errors)
 	totalBytes = atomic.LoadInt64(&s.bytes)
@@ -61,16 +69,20 @@ func (s *endpointStat) summary() (count int64, errors int64, totalBytes int64, p
 	for k, v := range s.statusCode {
 		codes[k] = v
 	}
+	zeroKinds = make(map[string]int64, len(s.zeroKinds))
+	for k, v := range s.zeroKinds {
+		zeroKinds[k] = v
+	}
 
 	if len(s.latencies) == 0 {
-		return count, errors, totalBytes, 0, 0, codes
+		return count, errors, totalBytes, 0, 0, codes, zeroKinds
 	}
 
 	copied := append([]time.Duration(nil), s.latencies...)
 	sort.Slice(copied, func(i, j int) bool { return copied[i] < copied[j] })
 	p95 = percentile(copied, 95)
 	p99 = percentile(copied, 99)
-	return count, errors, totalBytes, p95, p99, codes
+	return count, errors, totalBytes, p95, p99, codes, zeroKinds
 }
 
 func percentile(sorted []time.Duration, p float64) time.Duration {
@@ -110,12 +122,12 @@ func newMetrics(keys ...string) *metrics {
 	return m
 }
 
-func (m *metrics) add(endpoint string, latency time.Duration, status int, payloadBytes int64, isError bool) {
+func (m *metrics) add(endpoint string, latency time.Duration, status int, payloadBytes int64, isError bool, zeroKind string) {
 	st, ok := m.endpoints[endpoint]
 	if !ok {
 		return
 	}
-	st.add(latency, status, payloadBytes, isError)
+	st.add(latency, status, payloadBytes, isError, zeroKind)
 
 	if endpoint == "GET /files/{id}/download" {
 		atomic.AddInt64(&m.readOps, 1)
@@ -370,8 +382,8 @@ func runStress(stages []stage, cfg config, client *http.Client, pool *filePool, 
 					id, ok := pool.random(r)
 					if ok {
 						status, bytes, latency, err := downloadFile(wctx, client, cfg.baseURL, id)
-						isErr := err != nil || status == 0 || status >= 500
-						m.add("GET /files/{id}/download", latency, status, bytes, isErr)
+						zeroKind, isErr := classifyRequestError(err, status)
+						m.add("GET /files/{id}/download", latency, status, bytes, isErr, zeroKind)
 						continue
 					}
 				}
@@ -383,8 +395,8 @@ func runStress(stages []stage, cfg config, client *http.Client, pool *filePool, 
 				sizeBytes := int64(sizeMB) * 1024 * 1024
 				filePath := fmt.Sprintf("/io-stress/run/%02d/%d.bin", workerID, r.Int63())
 				uploadedID, status, latency, _, err := uploadFile(wctx, client, cfg.baseURL, cfg.userID, filePath, sizeBytes)
-				isErr := err != nil || status == 0 || status >= 500
-				m.add("POST /files/upload", latency, status, sizeBytes, isErr)
+				zeroKind, isErr := classifyRequestError(err, status)
+				m.add("POST /files/upload", latency, status, sizeBytes, isErr, zeroKind)
 				if err == nil && status >= 200 && status < 300 {
 					pool.add(uploadedID)
 				}
@@ -511,10 +523,40 @@ func bytesToMiB(v int64) float64 {
 	return float64(v) / (1024.0 * 1024.0)
 }
 
-func summaryOf(m *metrics, key string) (count int64, errors int64, totalBytes int64, p95 time.Duration, p99 time.Duration, codes map[int]int64) {
+func classifyRequestError(err error, status int) (zeroKind string, isError bool) {
+	if status >= 500 {
+		return "", true
+	}
+	if err == nil {
+		if status == 0 {
+			return "status0_unknown", true
+		}
+		return "", false
+	}
+
+	if errors.Is(err, context.Canceled) {
+		if status == 0 {
+			return "context_canceled", false
+		}
+		return "", false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		if status == 0 {
+			return "deadline_exceeded", true
+		}
+		return "", true
+	}
+
+	if status == 0 {
+		return "transport_error", true
+	}
+	return "", true
+}
+
+func summaryOf(m *metrics, key string) (count int64, errors int64, totalBytes int64, p95 time.Duration, p99 time.Duration, codes map[int]int64, zeroKinds map[string]int64) {
 	st, ok := m.endpoints[key]
 	if !ok {
-		return 0, 0, 0, 0, 0, map[int]int64{}
+		return 0, 0, 0, 0, 0, map[int]int64{}, map[string]int64{}
 	}
 	return st.summary()
 }
@@ -532,7 +574,7 @@ func printReport(cfg config, m *metrics, elapsed time.Duration) {
 
 	fmt.Println("\n-- Endpoint p95/p99 + throughput --")
 	for _, k := range keys {
-		count, errors, totalBytes, p95, p99, codes := summaryOf(m, k)
+		count, errors, totalBytes, p95, p99, codes, zeroKinds := summaryOf(m, k)
 		throughput := 0.0
 		if elapsed > 0 {
 			throughput = bytesToMiB(totalBytes) / elapsed.Seconds()
@@ -541,6 +583,7 @@ func printReport(cfg config, m *metrics, elapsed time.Duration) {
 		fmt.Printf("  count=%d errors=%d errorRate=%.2f%% bytes=%.2f MiB throughput=%.2f MiB/s p95=%s p99=%s\n",
 			count, errors, ratioPercent(errors, count), bytesToMiB(totalBytes), throughput, p95, p99)
 		printStatusCodes(codes, cfg.topCodes)
+		printZeroStatusBreakdown(zeroKinds)
 	}
 
 	readOps := atomic.LoadInt64(&m.readOps)
@@ -595,4 +638,35 @@ func printStatusCodes(codes map[int]int64, limit int) {
 		parts = append(parts, fmt.Sprintf("%d:%d", items[i].k, items[i].v))
 	}
 	fmt.Printf("  status codes: %s\n", strings.Join(parts, ", "))
+}
+
+func printZeroStatusBreakdown(zeroKinds map[string]int64) {
+	total := int64(0)
+	for _, v := range zeroKinds {
+		total += v
+	}
+	if total == 0 {
+		return
+	}
+
+	type kv struct {
+		k string
+		v int64
+	}
+	items := make([]kv, 0, len(zeroKinds))
+	for k, v := range zeroKinds {
+		items = append(items, kv{k: k, v: v})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].v == items[j].v {
+			return items[i].k < items[j].k
+		}
+		return items[i].v > items[j].v
+	})
+
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
+		parts = append(parts, fmt.Sprintf("%s:%d", item.k, item.v))
+	}
+	fmt.Printf("  status=0 breakdown: %s\n", strings.Join(parts, ", "))
 }

@@ -137,7 +137,7 @@ POST /files/upload
 ```bash
 # input
 cd /data/26-1-mystery-x/BuChoiPark
-go run ./loadtest/web_server_stress.go \
+go run web_server_stress.go \
   -base-url http://server-debug:8080 \
   -stages 100:10s,200:10s,300:10s \
   -prepare-count 6 \
@@ -156,16 +156,22 @@ go run io_stress.go \
   -base-url http://server-debug:8080 \
   -stages 10:10s,20:10s,40:10s \
   -read-ratio 0.8 \
-  -upload-min-mb 50 \
-  -upload-max-mb 300 \
+  -upload-min-mb 500 \
+  -upload-max-mb 1000 \
+  -prepare-count 8 \
+  -prepare-size-mb 100 \
+  -timeout 0
+
+go run io_stress.go \
+  -base-url http://server-debug:8080 \
+  -stages 20:20s \
+  -read-ratio 0.8 \
+  -upload-min-mb 500 \
+  -upload-max-mb 1000 \
   -prepare-count 8 \
   -prepare-size-mb 100 \
   -timeout 0
 ```
-
-
-
-
 
 ## Web Server Stress + Resource Metrics
 

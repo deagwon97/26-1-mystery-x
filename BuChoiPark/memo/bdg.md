@@ -222,3 +222,149 @@
 - 동일 조건 3회 반복 후 median 기준으로 비교(단일 run 편차 제거).
 - `io_stress.go`에서 `status=0`을 원인별(`context canceled`, transport error)로 분리 집계.
 - `host_cpu.csv`(iowait) + `psi_io.csv`(some/full)와 API 지표를 같은 타임라인으로 붙여 상관관계 확인.
+
+
+## 2026-03-08 큐잉 적용 + 측정 해석 보정 추가 정리
+
+### 코드/설정 변경 (추가)
+
+- `FileController` 다운로드 경로를 큐 기반으로 전환
+    - 기존: 실행 슬롯 부족 시 즉시 `503`.
+    - 변경: 연결 유지 후 큐에 적재, 선행 작업 완료 시 FIFO 순차 처리.
+    - 핵심 설정:
+        - `app.download.max-queue-bytes` (기본 1GiB)
+        - `app.download.max-queue-requests`
+        - `app.download.queue-timeout-ms`
+- `FileController` 업로드 경로도 동일 큐 패턴으로 확장
+    - 기존 `upload` 보호(`max-concurrency`, `max-inflight-bytes`)는 유지.
+    - 실행 슬롯/바이트 여유가 없으면 큐 적재 후 순차 처리.
+    - 큐 한도 초과/큐 대기 timeout 시 `503 + Retry-After: 1`.
+    - 핵심 설정:
+        - `app.upload.max-queue-bytes` (기본 1GiB)
+        - `app.upload.max-queue-requests`
+        - `app.upload.queue-timeout-ms`
+- `deploy/docker-compose.yaml` 튜닝 반영
+    - download:
+        - `APP_DOWNLOAD_MAX_QUEUE_BYTES=1073741824`
+        - `APP_DOWNLOAD_MAX_QUEUE_REQUESTS=200`
+        - `APP_DOWNLOAD_QUEUE_TIMEOUT_MS=20000`
+        - `APP_DOWNLOAD_RATE_LIMIT_RPS=40`
+    - upload:
+        - `APP_UPLOAD_MAX_QUEUE_BYTES=1073741824`
+        - `APP_UPLOAD_MAX_QUEUE_REQUESTS=200`
+        - `APP_UPLOAD_QUEUE_TIMEOUT_MS=20000`
+
+### 부하 도구 측정 보정
+
+- `loadtest/io_stress.go`에서 `status=0` 분리 집계 추가
+    - `context_canceled`
+    - `deadline_exceeded`
+    - `transport_error`
+    - `status0_unknown`
+- 에러율 계산 시 `context_canceled`는 실패에서 제외.
+    - stage 종료 시 취소 노이즈를 실제 장애와 분리해 해석 가능하도록 수정.
+
+### 최신 실행 결과 해석 (6/12/24, 50~150MB, read 80%)
+
+- 결과 요약:
+    - `GET /files/{id}/download`
+        - `count=105`, `errors=0`, `errorRate=0.00%`
+        - `status codes: 200:83, 0:22`
+        - `status=0 breakdown: context_canceled:22`
+        - `p95/p99`가 `~10s` 근처로 표시
+    - `POST /files/upload`
+        - `count=28`, `errors=0`, `errorRate=0.00%`
+        - `status codes: 200:27, 0:1`
+        - `status=0 breakdown: context_canceled:1`
+- 해석:
+    - 이전에 오류처럼 보이던 `status=0` 다수가 실제 서버 실패가 아니라 stage 종료 취소임을 확인.
+    - 현재 프로파일에서는 실질 오류율(취소 제외) 관점에서 upload/download 모두 안정 구간 진입.
+    - download `p95/p99 ~10s`는 stage 길이(10s) 종료 영향이 커서, 실제 서비스 tail과 1:1 대응 해석은 주의 필요.
+
+### 후속 권장
+
+- stage 길이를 늘린 재측정 (`6:30s,12:30s,24:30s`)으로 취소 노이즈를 추가 완화.
+- 필요 시 리포트에 "취소 제외 latency percentile"를 병행 표기해 비교 정확도 향상.
+
+
+## 후속
+
+### 큐잉 로직 재검증 결과
+
+- 검증 결론: 의도한 흐름(`요청 -> 연결 유지 -> 큐 등록 -> 선행 완료 후 pop 처리`)이 구현되어 있음.
+- 연결 유지:
+    - download: `DeferredResult<ResponseEntity<StreamingResponseBody>>` 사용.
+    - upload: `DeferredResult<ResponseEntity<FileUploadResponse>>` 사용.
+- 큐 등록:
+    - 실행 슬롯/바이트 여유 없으면 큐 적재.
+    - download는 `ConcurrentLinkedQueue`, upload는 `ArrayDeque(+lock)` 사용.
+- pop + 순차 처리:
+    - `drainDownloadQueue()` / `drainUploadQueue()`에서 큐에서 꺼내 다음 요청 처리.
+    - 처리 완료 시 `finally`에서 permit/bytes 반납 후 drain 재호출.
+- 연결 종료 시 큐 정리:
+    - `onTimeout`, `onError`에서 `cancelQueued...()` 호출로 대기열 항목 제거.
+
+### 튜닝 인자 정리 (CPU/MEM/연결수 기준)
+
+1) 연결 수용 한도 계층
+
+- `server.tomcat.max-connections`
+- `server.tomcat.accept-count`
+- `server.tomcat.threads.max`
+- `server.tomcat.threads.min-spare`
+- `app.download.async.request-timeout-ms`
+
+2) 실제 실행 슬롯 계층 (우선 튜닝)
+
+- `app.download.max-concurrency`
+- `app.upload.max-concurrency`
+- `app.upload.max-inflight-bytes`
+
+3) 큐 용량 계층
+
+- `app.download.max-queue-requests`
+- `app.download.max-queue-bytes`
+- `app.download.queue-timeout-ms`
+- `app.upload.max-queue-requests`
+- `app.upload.max-queue-bytes`
+- `app.upload.queue-timeout-ms`
+
+4) 유입 제어 계층
+
+- `app.download.rate-limit.enabled`
+- `app.download.rate-limit.requests-per-second`
+
+### 실무 튜닝 순서 (권장)
+
+1. 먼저 `max-concurrency`를 CPU/디스크에 맞게 조정.
+2. 다음으로 `max-queue-requests`를 조정해 조기 503 vs tail latency 균형점 탐색.
+3. `queue-timeout-ms` 조정(짧으면 503 증가, 길면 p95/p99 증가).
+4. 마지막으로 `rate-limit RPS` 조정.
+
+### 지표 기반 빠른 의사결정 가이드
+
+- CPU 포화(`>85%` 지속): `max-concurrency` 하향.
+- 503 증가 + CPU 여유: `max-queue-requests`/`queue-timeout-ms` 상향 검토.
+- 오류율 낮고 p95/p99만 큼: 큐 과대 가능성, `max-queue-requests`/`queue-timeout-ms` 하향 검토.
+- 429 다수: `rate-limit RPS` 상향 또는 앞단(L7) 선차단 정책 재조정.
+
+### 현재 적용값(메모)
+
+- download
+    - `APP_DOWNLOAD_MAX_CONCURRENCY=24`
+    - `APP_DOWNLOAD_MAX_QUEUE_BYTES=1073741824`
+    - `APP_DOWNLOAD_MAX_QUEUE_REQUESTS=200`
+    - `APP_DOWNLOAD_QUEUE_TIMEOUT_MS=20000`
+    - `APP_DOWNLOAD_RATE_LIMIT_RPS=40`
+- upload
+    - `APP_UPLOAD_MAX_CONCURRENCY=8`
+    - `APP_UPLOAD_MAX_INFLIGHT_BYTES=1073741824`
+    - `APP_UPLOAD_MAX_QUEUE_BYTES=1073741824`
+    - `APP_UPLOAD_MAX_QUEUE_REQUESTS=200`
+    - `APP_UPLOAD_QUEUE_TIMEOUT_MS=20000`
+
+### 주의점
+
+- upload는 큐 대기 중 `MultipartFile` 요청이 살아 있어 임시 디스크/메모리 점유가 커질 수 있음.
+- 따라서 upload 큐(`max-queue-requests`, `queue-timeout-ms`)는 download보다 보수적으로 유지하는 편이 안전.
+
