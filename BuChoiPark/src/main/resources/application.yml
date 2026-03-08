@@ -9,6 +9,39 @@ spring:
     init:
       mode: always
 
+server:
+  tomcat:
+    threads:
+      max: ${SERVER_TOMCAT_THREADS_MAX:200}
+      min-spare: ${SERVER_TOMCAT_THREADS_MIN_SPARE:20}
+    accept-count: ${SERVER_TOMCAT_ACCEPT_COUNT:1000}
+    max-connections: ${SERVER_TOMCAT_MAX_CONNECTIONS:2000}
+
 app:
   storage:
     dir: ${APP_STORAGE_DIR:./data/uploads}
+  # FileController + WebMvcAsyncConfig에서 사용하는 다운로드 보호 설정입니다.
+  # 느린 클라이언트 환경에서 스레드 고갈 검증 시 이 값을 조정합니다.
+  download:
+    # 동시에 허용할 다운로드 스트림 최대 개수입니다. 초과 요청은 503을 반환합니다.
+    max-concurrency: ${APP_DOWNLOAD_MAX_CONCURRENCY:80}
+    # permit 확보를 짧게 대기해 순간 버스트에서 즉시 503 남발을 완화합니다.
+    acquire-timeout-ms: ${APP_DOWNLOAD_ACQUIRE_TIMEOUT_MS:75}
+    rate-limit:
+      enabled: ${APP_DOWNLOAD_RATE_LIMIT_ENABLED:true}
+      # 비협조적인 즉시 재시도 트래픽으로부터 서버를 보호하기 위한 기본 제한입니다.
+      requests-per-second: ${APP_DOWNLOAD_RATE_LIMIT_RPS:30}
+    async:
+      # StreamingResponseBody 실행에 쓰이는 bounded MVC async 풀 설정입니다.
+      core-pool-size: ${APP_DOWNLOAD_ASYNC_CORE_POOL_SIZE:16}
+      max-pool-size: ${APP_DOWNLOAD_ASYNC_MAX_POOL_SIZE:64}
+      queue-capacity: ${APP_DOWNLOAD_ASYNC_QUEUE_CAPACITY:200}
+      # async 요청 타임아웃(ms)입니다.
+      request-timeout-ms: ${APP_DOWNLOAD_ASYNC_TIMEOUT_MS:120000}
+  upload:
+    # 동시에 허용할 업로드 처리 개수입니다. 초과 요청은 503을 반환합니다.
+    max-concurrency: ${APP_UPLOAD_MAX_CONCURRENCY:16}
+    # permit 확보를 짧게 대기해 순간 버스트에서 즉시 503 남발을 완화합니다.
+    acquire-timeout-ms: ${APP_UPLOAD_ACQUIRE_TIMEOUT_MS:75}
+    # 업로드 처리 중인 총 바이트 상한입니다. 기본값 2GiB.
+    max-inflight-bytes: ${APP_UPLOAD_MAX_INFLIGHT_BYTES:2147483648}
