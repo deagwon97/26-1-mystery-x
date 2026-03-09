@@ -368,6 +368,60 @@
 - upload는 큐 대기 중 `MultipartFile` 요청이 살아 있어 임시 디스크/메모리 점유가 커질 수 있음.
 - 따라서 upload 큐(`max-queue-requests`, `queue-timeout-ms`)는 download보다 보수적으로 유지하는 편이 안전.
 
-## 
-- nginx로 수정
-- gzip 적용
+## 2026-03-08 Nginx 이관 이슈 정리
+
+### 목표
+
+- 파일 업로드/다운로드의 바이트 처리 경로를 Kotlin에서 Nginx(OpenResty)로 이관.
+- Kotlin은 메타데이터 저장/조회 및 훅 수신만 담당.
+
+### 반영한 구조
+
+- `deploy/docker-compose.yaml`
+    - `nginx` 서비스 추가 및 `../data/uploads:/app/data/uploads` 공유 마운트 적용.
+    - 외부 포트 매핑 제거, 내부 노출만 유지: `expose: ["8080"]`.
+- `nginx/conf.d/default.conf`
+    - `listen 8080`.
+    - `resolver 127.0.0.11 ipv6=off` 추가(Docker DNS for Lua cosocket).
+    - `/files/upload`, `/files/{id}/download`를 Lua 핸들러로 처리.
+    - 내부 라우트:
+        - `/_meta/upload` -> `server-debug:8080/internal/files/upload-metadata`
+        - `/_meta/download/{id}` -> `server-debug:8080/internal/files/{id}/download-metadata`
+        - `/_legacy/upload` -> `server-debug:8080/files/upload` (multipart 호환)
+- `nginx/lua`
+    - `upload.lua`, `download.lua`, `on_request.lua`, `before_response.lua`, `meta_http.lua` 추가/수정.
+    - `on_request.lua`, `before_response.lua`에서 `package.path`에 `/etc/nginx/lua`를 prepend 후 `require("meta_http")`.
+
+### 발생한 문제와 원인
+
+1. `module 'meta_http' not found`
+- 원인: OpenResty 기본 `package.path`에 `/etc/nginx/lua`가 없음.
+- 조치: `on_request.lua`, `before_response.lua`에서 `package.path` 보강.
+
+2. `no resolver defined to resolve "server-debug"`
+- 원인: `ngx.timer` 내부 cosocket DNS 해석기 미설정.
+- 조치: Nginx `server` 블록에 `resolver 127.0.0.11 ipv6=off` 추가.
+
+3. `BASE_URL=nginx:8080 ./test.sh` 실행 시 업로드 전부 실패
+- 증상: `X-User-Id, X-File-Path, X-File-Name headers are required`.
+- 원인: Nginx `upload.lua`는 raw+header 기반, E2E는 `multipart/form-data`(`curl -F`) 사용.
+- 조치: `upload.lua`에서 multipart 감지 시 `ngx.exec("/_legacy/upload")`로 Kotlin 기존 업로드 API 내부 전달.
+
+4. 같은 스크립트가 한 번은 성공, 한 번은 실패
+- 핵심 차이: `./test.sh` 기본값(`http://localhost:8080`)은 Kotlin 직통, `BASE_URL=nginx:8080`은 Nginx 경유.
+- 조치: Nginx 경유에서도 Kotlin 직통과 동일한 multipart 의미를 갖도록 호환 라우팅 적용.
+
+### E2E 실행 규칙
+
+- 서버 컨테이너에서 Nginx 경유 테스트 시 권장:
+    - `BASE_URL=http://nginx:8080 ./test.sh`
+- 스킴(`http://`)을 붙여 URL 파싱 혼선을 방지.
+
+### 현재 상태
+
+- Nginx는 내부 `8080/tcp`로 정상 기동.
+- `server-debug` 컨테이너에서 `http://nginx:8080` 접근 가능.
+- 최근 수정 후 `meta_http not found`, `no resolver defined` 에러 재발 없음.
+- 업로드 경로는 다음 2가지 모두 지원:
+    - raw body + `X-User-Id/X-File-Path/X-File-Name`
+    - multipart/form-data (`curl -F`, 기존 E2E 방식)
