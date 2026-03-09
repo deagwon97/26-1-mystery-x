@@ -48,3 +48,5 @@ data/
 ## log, report
 *.log, *.csv
 results
+
+e2e-test/download

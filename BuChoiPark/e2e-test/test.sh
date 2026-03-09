@@ -1,5 +1,7 @@
 #!/bin/bash
 
+BASE_URL="${BASE_URL:-http://localhost:8080}"
+
 echo 해당 스크립트는 파일 업로드, 다운로드, 이동 기능을 테스트하기 위한 E2E 테스트입니다.
 echo 항상 db 및 업로드된 파일을 초기화됩니다.
 echo "정말 진행하시겠습니까? (y/n)"
@@ -17,7 +19,7 @@ rm -rf ./test.txt
 
 # 1) 업로드
 echo "1) 파일 업로드:"
-UPLOAD_RES=$(curl -s -X POST "http://localhost:8080/files/upload" \
+UPLOAD_RES=$(curl -s -X POST "${BASE_URL}/files/upload" \
   -F "userId=user-123" \
   -F "filePath=/docs/test.txt" \
   -F "file=@/app/e2e-test/upload-original/test.txt")
@@ -26,76 +28,76 @@ echo "$UPLOAD_RES" | jq
 # 2) 업로드 응답에서 id 추출 (jq 필요)
 FILE_ID=$(echo "$UPLOAD_RES" | jq -r '.id')
 
-curl -s -X POST "http://localhost:8080/files/upload" \
+curl -s -X POST "${BASE_URL}/files/upload" \
   -F "userId=user-123" \
   -F "filePath=/docs/test2.txt" \
   -F "file=@/app/e2e-test/upload-original/test.txt"
 
-curl -s -X POST "http://localhost:8080/files/upload" \
+curl -s -X POST "${BASE_URL}/files/upload" \
   -F "userId=user-123" \
   -F "filePath=/docs/test3.txt" \
   -F "file=@/app/e2e-test/upload-original/test.txt"
 
-curl -s -X POST "http://localhost:8080/files/upload" \
+curl -s -X POST "${BASE_URL}/files/upload" \
   -F "userId=user-123" \
   -F "filePath=/folderA/file1" \
   -F "file=@/app/e2e-test/upload-original/test.txt"
 
-curl -s -X POST "http://localhost:8080/files/upload" \
+curl -s -X POST "${BASE_URL}/files/upload" \
   -F "userId=user-123" \
   -F "filePath=/folderA/file2" \
   -F "file=@/app/e2e-test/upload-original/test.txt"
 
-curl -s -X POST "http://localhost:8080/files/upload" \
+curl -s -X POST "${BASE_URL}/files/upload" \
   -F "userId=user-123" \
   -F "filePath=/folderA/folderB/file3" \
   -F "file=@/app/e2e-test/upload-original/test.txt"
 
-curl -s -X POST "http://localhost:8080/files/upload" \
+curl -s -X POST "${BASE_URL}/files/upload" \
   -F "userId=user-123" \
   -F "filePath=/folderA/folderB/file4" \
   -F "file=@/app/e2e-test/upload-original/test.txt"
 
-curl -s -X POST "http://localhost:8080/files/upload" \
+curl -s -X POST "${BASE_URL}/files/upload" \
   -F "userId=user-123" \
   -F "filePath=/folderA/folderB/folderC/file6" \
   -F "file=@/app/e2e-test/upload-original/test.txt"
 
-curl -s -X POST "http://localhost:8080/files/upload" \
+curl -s -X POST "${BASE_URL}/files/upload" \
   -F "userId=user-123" \
   -F "filePath=/folderA/folderB/folderC/file7" \
   -F "file=@/app/e2e-test/upload-original/test.txt"
 
 # 3) 전체 목록 조회
 echo "3) 전체 파일 목록:"
-curl -s "http://localhost:8080/files" | jq
+curl -s "${BASE_URL}/files" | jq
 
 # 4) 사용자 필터 목록 조회
 echo "4) 사용자 필터 목록:"
-curl -s "http://localhost:8080/files?userId=user-123" | jq -r '.[0].id'
+curl -s "${BASE_URL}/files?userId=user-123" | jq -r '.[0].id'
 
 # 5) 다운로드
 echo "5) 파일 다운로드:"
-curl -OJ "http://localhost:8080/files/${FILE_ID}/download" 
+curl -OJ "${BASE_URL}/files/${FILE_ID}/download" 
 
 # 6) 파일 이동 (메타데이터만 변경, 폴더 경로만 지정해도 파일명 자동 보정)
 echo "6) 파일 이동:"
-curl -s -X POST "http://localhost:8080/files/${FILE_ID}/move" \
+curl -s -X POST "${BASE_URL}/files/${FILE_ID}/move" \
   -H "Content-Type: application/json" \
   -d '{"filePath":"/virtual/moved/"}' | jq
 
 echo "업데이트 후 전체 파일 목록:"
-curl -s "http://localhost:8080/files" | jq
+curl -s "${BASE_URL}/files" | jq
 
 
 # 7) 폴더 이동 (prefix 기반 일괄 변경)
 echo "7) 폴더 이동:"
-curl -s -X POST "http://localhost:8080/files/move-folder" \
+curl -s -X POST "${BASE_URL}/files/move-folder" \
   -H "Content-Type: application/json" \
   -d '{"fromPath":"/virtual/moved","toPath":"/docs2"}' | jq 
 
 echo "업데이트 후 전체 파일 목록:"
-curl -s "http://localhost:8080/files" | jq
+curl -s "${BASE_URL}/files" | jq
 
 
 # 8) 다운로드된 파일과 원본 데이터가 일치하는지 확인
@@ -108,13 +110,13 @@ fi
 
 # 9) 폴더 내 파일 목록 조회
 echo "9) 폴더 내 파일 목록 조회:"
-curl -s "http://localhost:8080/files/folder?folderPath=/folderA&userId=user-123" | jq
+curl -s "${BASE_URL}/files/folder?folderPath=/folderA&userId=user-123" | jq
 
 
 # 10) 파일 삭제 (userId + filePath)
 echo "10) 파일 삭제(userId + filePath):"
 DELETE_STATUS=$(curl -s -o /tmp/delete_result.json -w "%{http_code}" -X DELETE \
-  "http://localhost:8080/files?userId=user-123&filePath=/docs2/test.txt")
+  "${BASE_URL}/files?userId=user-123&filePath=/docs2/test.txt")
 
 cat /tmp/delete_result.json | jq
 echo "삭제 응답 코드: ${DELETE_STATUS}"
@@ -139,7 +141,7 @@ fi
 # 11) 폴더 삭제 (userId + folderPath, 하위 전체 삭제)
 echo "11) 폴더 삭제(userId + folderPath):"
 DELETE_FOLDER_STATUS=$(curl -s -o /tmp/delete_folder_result.json -w "%{http_code}" -X DELETE \
-  "http://localhost:8080/files/folder?userId=user-123&folderPath=/folderA")
+  "${BASE_URL}/files/folder?userId=user-123&folderPath=/folderA")
 
 cat /tmp/delete_folder_result.json | jq
 echo "폴더 삭제 응답 코드: ${DELETE_FOLDER_STATUS}"

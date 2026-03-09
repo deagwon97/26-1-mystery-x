@@ -15,6 +15,38 @@ class FileService(
     @Value("\${app.storage.dir}")
     private val storageDir: String,
 ) {
+    fun createUploadMetadata(userId: String, filePath: String, fileName: String, fileSize: Long): FileUploadResponse {
+        val fileId = UuidCreator.getTimeOrderedEpoch()
+        val uploadedAt = Instant.now()
+        val normalizedPath = normalizeFilePath(filePath, fileName)
+
+        val response = FileUploadResponse(
+            id = fileId.toString(),
+            userId = userId,
+            uploadedAt = uploadedAt.toString(),
+            fileName = fileName,
+            filePath = normalizedPath,
+            fileSize = fileSize,
+        )
+
+        fileRepository.insertFile(response)
+        return response
+    }
+
+    fun getDownloadMetadata(id: String): DownloadMetadataResponse? {
+        val info = fileRepository.findDownloadInfo(id) ?: return null
+        return DownloadMetadataResponse(
+            id = id,
+            fileName = info.fileName,
+            fileSize = info.fileSize,
+            storagePath = Path.of(storageDir).resolve(id).toString(),
+        )
+    }
+
+    fun recordNginxHook(request: NginxHookRequest) {
+        // Hook payloads are accepted for observability. Persistence is intentionally optional.
+    }
+
     fun deleteFolder(userId: String, folderPath: String): Int {
         val normalizedFolderPath = normalizeFolderPath(folderPath)
         val pathPrefix = if (normalizedFolderPath == "/") "/" else "$normalizedFolderPath/"

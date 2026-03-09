@@ -368,3 +368,6 @@
 - upload는 큐 대기 중 `MultipartFile` 요청이 살아 있어 임시 디스크/메모리 점유가 커질 수 있음.
 - 따라서 upload 큐(`max-queue-requests`, `queue-timeout-ms`)는 download보다 보수적으로 유지하는 편이 안전.
 
+## 
+- nginx로 수정
+- gzip 적용

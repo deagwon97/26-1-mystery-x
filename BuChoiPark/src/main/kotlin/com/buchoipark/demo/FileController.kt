@@ -79,6 +79,42 @@ class FileController(
         return ResponseEntity.ok(mapOf("status" to "UP"))
     }
 
+    @PostMapping("/internal/files/upload-metadata")
+    fun createUploadMetadata(@RequestBody request: UploadMetadataRequest): ResponseEntity<FileUploadResponse> {
+        if (request.userId.isBlank() || request.filePath.isBlank() || request.fileName.isBlank()) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).build()
+        }
+
+        val response = fileService.createUploadMetadata(
+            userId = request.userId,
+            filePath = request.filePath,
+            fileName = request.fileName,
+            fileSize = request.fileSize.coerceAtLeast(0),
+        )
+        return ResponseEntity.ok(response)
+    }
+
+    @GetMapping("/internal/files/{id}/download-metadata")
+    fun getDownloadMetadata(
+        @PathVariable("id") id: String,
+    ): ResponseEntity<DownloadMetadataResponse> {
+        val metadata = fileService.getDownloadMetadata(id)
+            ?: return ResponseEntity.status(HttpStatus.NOT_FOUND).build()
+        return ResponseEntity.ok(metadata)
+    }
+
+    @PostMapping("/internal/nginx-hooks/request")
+    fun receiveRequestHook(@RequestBody request: NginxHookRequest): ResponseEntity<Void> {
+        fileService.recordNginxHook(request)
+        return ResponseEntity.noContent().build()
+    }
+
+    @PostMapping("/internal/nginx-hooks/response")
+    fun receiveResponseHook(@RequestBody request: NginxHookRequest): ResponseEntity<Void> {
+        fileService.recordNginxHook(request)
+        return ResponseEntity.noContent().build()
+    }
+
     @PostMapping("/files/move-folder")
     fun moveFolder(@RequestBody request: MoveFolderRequest): ResponseEntity<Map<String, Any>> {
         val fromPath = request.fromPath.trimEnd('/')
@@ -615,4 +651,29 @@ data class MoveFileRequest(
 data class MoveFolderRequest(
     val fromPath: String,
     val toPath: String,
+)
+
+data class UploadMetadataRequest(
+    val userId: String,
+    val filePath: String,
+    val fileName: String,
+    val fileSize: Long,
+)
+
+data class DownloadMetadataResponse(
+    val id: String,
+    val fileName: String,
+    val fileSize: Long,
+    val storagePath: String,
+)
+
+data class NginxHookRequest(
+    val phase: String? = null,
+    val requestId: String? = null,
+    val method: String? = null,
+    val path: String? = null,
+    val status: Int? = null,
+    val elapsedMs: Long? = null,
+    val remoteAddr: String? = null,
+    val timestamp: Long? = null,
 )
