@@ -1,54 +1,115 @@
 # Upload Lua 리팩터링 메모
 
-## 목적
-- 현재 [nginx/lua/upload.lua](nginx/lua/upload.lua) 업로드 경로의 성능 병목 지점을 정리한다.
-- 이후 리팩터링 작업의 기준 문서로 사용한다.
+## 목표 및 전제
+- 목표: 단일 물리 노드 환경에서 업로드 처리 성능(특히 p95/p99) 개선
+- 전제: 확장(멀티 노드, 오브젝트 스토리지 분리)은 지금 단계에서 고려하지 않음
+- 전략: Nginx 직저장 구조는 유지하되, 불필요한 I/O와 worker 점유를 줄이는 방향으로 개선
 
-## 현재 구조 요약
-- 업로드 요청은 Nginx Lua에서 본문을 읽는다.
-- 메타데이터를 내부 API `/_meta/upload`로 생성한다.
-- 생성된 id를 파일명으로 사용해 `/app/data/uploads/{id}`에 저장한다.
+## 지금까지 한 것
+- 업로드 경로 성능 병목을 식별했다.
+- 핵심 병목 4개를 우선순위로 정리했다.
+	- Lua 동기 파일 I/O worker 점유
+	- body 전체 버퍼링
+	- temp 파일 재복사
+	- 메타데이터 내부 호출 직렬 대기
+- 현재 방향을 "Nginx 직저장 유지 + 로컬 최적화"로 확정했다.
 
-## 성능상 주요 이슈 (우선순위)
+## 지금 하고 있는 것
+- 아래 단기 계획 항목을 구현 가능한 작업 단위로 쪼개고, 적용 순서를 고정한다.
+- 1차 목표는 디스크 재복사 제거(rename 우선)와 file size 계산 비용 절감이다.
 
-### 1) 동기 파일 I/O로 인한 Worker 블로킹 (가장 심각)
-- 위치: [nginx/lua/upload.lua](nginx/lua/upload.lua#L39), [nginx/lua/upload.lua](nginx/lua/upload.lua#L73), [nginx/lua/upload.lua](nginx/lua/upload.lua#L87)
-- 원인: `io.open`, `read`, `write`는 블로킹 호출이라 파일 처리 중 worker가 점유된다.
-- 영향: 동시 업로드 증가 시 처리량 저하, 지연시간 급증, p95/p99 악화.
+## 단기 plan (즉시 적용)
 
-### 2) 요청 본문 전체 버퍼링
-- 위치: [nginx/lua/upload.lua](nginx/lua/upload.lua#L24), [nginx/lua/upload.lua](nginx/lua/upload.lua#L25), [nginx/lua/upload.lua](nginx/lua/upload.lua#L26)
-- 원인: `ngx.req.read_body()` 기반이라 스트리밍이 아니라 전체 수신 후 처리한다.
-- 영향: 대용량에서 메모리/디스크 임시 저장 비용 증가, 응답까지 지연 증가.
+### 1) temp 재복사 제거: rename 우선, 실패 시 copy fallback
+- 대상: `nginx/lua/upload.lua` (기준: 기존 line 81 부근)
+- 변경 범위:
+	- `body_file` 경로를 최종 경로로 먼저 `os.rename(body_file, target_path)` 시도
+	- rename 실패 시에만 기존 chunk copy 로직 수행
+- 기대 효과:
+	- 같은 파일시스템이면 rename은 메타데이터 연산 중심으로 매우 빠름
+	- 대용량 업로드의 디스크 read/write 총량 감소
+- 롤백:
+	- rename 분기 제거 후 기존 copy-only 로직으로 복귀
+- 검증:
+	- 업로드 기능 정상 동작(200 응답, 다운로드 무결성)
+	- loadtest에서 `POST /files/upload` p95/p99 비교
 
-### 3) Temp 파일에서 최종 저장소로 재복사
-- 위치: [nginx/lua/upload.lua](nginx/lua/upload.lua#L81), [nginx/lua/upload.lua](nginx/lua/upload.lua#L92)
-- 원인: Nginx body temp 파일을 다시 읽어 최종 파일로 기록한다.
-- 영향: 디스크 read/write가 2배 가까이 증가해 I/O 병목 가능성이 커진다.
+### 2) file size 계산: Content-Length 헤더 우선 사용
+- 대상: `nginx/lua/upload.lua` (기준: 기존 line 33 부근)
+- 변경 범위:
+	- `headers["Content-Length"]`를 정수로 파싱해 `file_size`로 우선 사용
+	- 헤더가 없거나 비정상이면 기존 방식(`body_data` 길이 또는 파일 seek) fallback
+- 기대 효과:
+	- body_file 케이스에서 file size 계산용 추가 파일 open/seek 비용 감소
+- 롤백:
+	- 헤더 우선 분기 제거 후 기존 계산 방식 복귀
+- 검증:
+	- 메타데이터의 `fileSize` 정확성 확인
 
-### 4) 메타데이터 내부 호출의 직렬 대기
-- 위치: [nginx/lua/upload.lua](nginx/lua/upload.lua#L54), [nginx/lua/upload.lua](nginx/lua/upload.lua#L59)
-- 원인: 업로드마다 `/_meta/upload` 응답을 기다린 뒤 다음 단계로 진행한다.
-- 영향: 메타 API 지연이 업로드 전체 지연으로 직결된다.
+### 3) upload location 전용 최소 튜닝
+- 대상: `nginx/conf.d/default.conf` (`location = /files/upload`)
+- 변경 범위(초기안):
+	- 업로드 경로에만 body/temp/log 관련 설정 적용
+	- 전역 영향 없이 upload 엔드포인트에 한정
+- 기대 효과:
+	- 다른 API와의 간섭 최소화
+	- 업로드 트래픽 변동 시 운영 안정성 증가
+- 롤백:
+	- 해당 location 내부 튜닝 항목만 제거
+- 검증:
+	- 기능 회귀 없음
+	- 기존 read API 지연 악화 없음
 
-## 설정 관점 점검 포인트
-- 현재 [nginx/conf.d/default.conf](nginx/conf.d/default.conf#L4) 에는 `client_max_body_size`만 명시되어 있다.
-- body 버퍼/임시 파일 관련 설정(`client_body_buffer_size`, temp path, 디스크 특성) 점검이 필요하다.
+### 4) body temp 경로와 최종 저장 경로를 같은 파일시스템으로 정렬
+- 대상: `nginx/conf.d/default.conf`
+- 변경 범위:
+	- `client_body_temp_path`를 `/app/data/uploads`와 동일 파일시스템 경로로 지정
+	- 디렉터리 권한/정리 정책 포함 점검
+- 기대 효과:
+	- rename 성공률 상승
+	- copy fallback 발생 빈도 감소
+- 롤백:
+	- 기존 temp 경로로 되돌림
+- 검증:
+	- rename 성공률 로그(또는 카운터) 확인
+	- 블록 I/O 감소 여부 관찰
 
-## 리스크
-- 메타데이터 생성 후 파일 저장 실패 시 정합성 이슈(고아 메타데이터)가 발생할 수 있다.
-- 재시도/보상 트랜잭션 정책 부재 시 장애 상황에서 운영 부담이 커진다.
+## 중기 plan (안정화)
+1. rename/copy 분기별 카운터 및 실패 원인 로깅 추가
+2. upload 요청 처리시간을 단계별로 분해 측정
+	 - body read
+	 - metadata call
+	 - file persist(rename or copy)
+3. 장애 시 고아 메타데이터 정리 배치(보상 처리)
+4. 운영 가이드 정리
+	 - temp 디렉터리 용량/정리 정책
+	 - 디스크 여유 임계치 알람
 
-## 개선 우선순위 제안
-1. 업로드 경로에서 Lua 동기 파일 I/O 제거 또는 최소화
-2. 전체 body 버퍼링 대신 스트리밍 처리로 전환
-3. 메타데이터 생성-저장 플로우를 선발급/완료확정 구조로 재설계
-4. Nginx body/temp 관련 설정과 저장 디스크 I/O 성능 튜닝
+## 장기 plan (구조 개선 후보, 지금은 보류)
+1. 업로드 플로우를 init/upload/complete 형태로 분리
+2. multipart 유사 업로드 지원(재시도/부분 실패 복구 강화)
+3. 메타데이터 완료 확정(finalize) 계약 도입
 
-## 다음 작업 기준
-- 이 문서를 기준으로 리팩터링 작업을 진행한다.
-- 각 개선안은 다음 항목을 함께 정의한다.
-	- 변경 범위
-	- 기대 효과(지연/처리량)
-	- 실패 시 롤백 방법
-	- 테스트 방법(대용량/동시 업로드)
+## 성능 리스크 및 체크포인트
+- rename 실패가 잦으면 여전히 copy 비용이 크게 발생한다.
+- temp 경로와 최종 경로가 다른 마운트면 rename은 `EXDEV`로 실패한다.
+- 메타데이터 생성 후 저장 실패 시 정합성 이슈가 남는다.
+
+## 테스트/측정 기준
+- 기준 도구: `loadtest/README.md`에 정리된 스크립트 사용
+- 최소 관찰 지표:
+	- `POST /files/upload` p95/p99
+	- write error rate
+	- timeout/connection reset/broken pipe/503
+	- docker block I/O 및 서버 로그 에러
+- 합격 기준(초안):
+	- 기능 회귀 0
+	- write error rate 개선 또는 유지
+	- p95/p99 유의미 개선
+
+## 실행 순서 (체크리스트)
+- [ ] `upload.lua`: rename 우선 + copy fallback
+- [ ] `upload.lua`: Content-Length 우선 fileSize 계산
+- [ ] `default.conf`: upload location 전용 최소 튜닝
+- [ ] `default.conf`: body temp 경로 파일시스템 정렬
+- [ ] loadtest 전/후 비교 리포트 기록

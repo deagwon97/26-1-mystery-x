@@ -170,13 +170,13 @@ func parseFlags() config {
 	}
 
 	flag.StringVar(&cfg.baseURL, "base-url", defaultBaseURL, "Target base URL")
-	flag.StringVar(&cfg.stagesRaw, "stages", "10:5m,20:5m,40:5m", "Stage spec: concurrency:duration comma-separated")
+	flag.StringVar(&cfg.stagesRaw, "stages", "10:10s,20:10s", "Stage spec: concurrency:duration comma-separated")
 	flag.Int64Var(&cfg.seed, "seed", time.Now().UnixNano(), "Random seed")
 
 	flag.StringVar(&cfg.userID, "user-id", "io-stress-user", "userId used for upload/list")
 	flag.Float64Var(&cfg.readRatio, "read-ratio", 0.80, "Read ratio (0~1), write ratio is 1-read-ratio")
-	flag.IntVar(&cfg.uploadMinMB, "upload-min-mb", 50, "Minimum upload size in MB")
-	flag.IntVar(&cfg.uploadMaxMB, "upload-max-mb", 300, "Maximum upload size in MB")
+	flag.IntVar(&cfg.uploadMinMB, "upload-min-mb", 500, "Minimum upload size in MB")
+	flag.IntVar(&cfg.uploadMaxMB, "upload-max-mb", 1000, "Maximum upload size in MB")
 
 	flag.IntVar(&cfg.prepareCount, "prepare-count", 8, "Number of files uploaded before stress")
 	flag.IntVar(&cfg.prepareSizeMB, "prepare-size-mb", 100, "Size (MB) of each prepare upload")
