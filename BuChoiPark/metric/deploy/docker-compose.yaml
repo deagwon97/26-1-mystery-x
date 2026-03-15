@@ -1,0 +1,36 @@
+services:
+  container-monitor:
+    build:
+      context: ../
+      dockerfile: ./deploy/Dockerfile
+    container_name: container-monitor
+    environment:
+      - TARGET_CONTAINER=${TARGET_CONTAINER:-server-debug}
+      - OUTPUT_DIR=/workspace/results
+    command:
+      - sh
+      - -c
+      - |
+        tail -f /dev/null
+      # - --target
+      # - ${TARGET_CONTAINER:-server-debug}
+      # - --interval
+      # - 1s
+      # - --out
+      # - /workspace/results
+      # - --file
+      # - container-monitor.csv
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ../results:/workspace/results
+      - ../src:/workspace/src
+    stdin_open: true
+    tty: true
+    privileged: true
+    cap_add:
+      - ALL
+    security_opt:
+      - apparmor:unconfined
+      - seccomp:unconfined
+    restart: unless-stopped
+
