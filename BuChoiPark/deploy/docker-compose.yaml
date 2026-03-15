@@ -68,4 +68,26 @@ services:
     cpus: "16.0"
     mem_limit: 32g
     restart: unless-stopped
+  container-monitor:
+    build:
+      context: ../metric
+      dockerfile: ./metric/Dockerfile
+    container_name: container-monitor
+    environment:
+      - TARGET_CONTAINER=${TARGET_CONTAINER:-server-debug}
+      - OUTPUT_DIR=/workspace/results
+    command: "bash -c 'tail -f /dev/null'"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ../metric/results:/workspace/results
+      - ../metric/src:/workspace/src
+    stdin_open: true
+    tty: true
+    privileged: true
+    cap_add:
+      - ALL
+    security_opt:
+      - apparmor:unconfined
+      - seccomp:unconfined
+    restart: unless-stopped
 
