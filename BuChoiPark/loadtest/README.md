@@ -156,6 +156,7 @@ go run io_stress.go \
   -base-url http://server-debug:8080 \
   -stages 10:10s,20:10s,40:10s \
   -read-ratio 0.8 \
+  -upload-mode multipart \
   -upload-min-mb 500 \
   -upload-max-mb 1000 \
   -prepare-count 8 \
@@ -166,12 +167,16 @@ go run io_stress.go \
   -base-url http://server-debug:8080 \
   -stages 20:20s \
   -read-ratio 0.8 \
+  -upload-mode raw \
   -upload-min-mb 500 \
   -upload-max-mb 1000 \
   -prepare-count 8 \
   -prepare-size-mb 100 \
   -timeout 0
 ```
+
+- `-upload-mode multipart` : `multipart/form-data` 업로드 (Nginx에서는 `/_legacy/upload` 경유)
+- `-upload-mode raw` : raw body + `X-User-Id/X-File-Path/X-File-Name` 헤더 업로드 (Nginx Lua 직저장 경로)
 
 ## Web Server Stress + Resource Metrics
 

@@ -33,7 +33,11 @@ if not body_data and not body_file then
 end
 
 local file_size = 0
-if body_data then
+local content_length = tonumber(headers["Content-Length"])
+
+if content_length and content_length >= 0 and content_length % 1 == 0 then
+    file_size = content_length
+elseif body_data then
     file_size = #body_data
 else
     local f = io.open(body_file, "rb")
@@ -69,33 +73,40 @@ if not metadata or not metadata.id then
 end
 
 local target_path = "/app/data/uploads/" .. metadata.id
+if body_file then
+    local renamed, _ = os.rename(body_file, target_path)
+    if not renamed then
+        local out = io.open(target_path, "wb")
+        if not out then
+            return ngx.exit(ngx.HTTP_INTERNAL_SERVER_ERROR)
+        end
 
-local out = io.open(target_path, "wb")
-if not out then
-    return ngx.exit(ngx.HTTP_INTERNAL_SERVER_ERROR)
-end
+        local input = io.open(body_file, "rb")
+        if not input then
+            out:close()
+            return ngx.exit(ngx.HTTP_INTERNAL_SERVER_ERROR)
+        end
 
-if body_data then
-    out:write(body_data)
-else
-    local input = io.open(body_file, "rb")
-    if not input then
+        while true do
+            local chunk = input:read(65536)
+            if not chunk then
+                break
+            end
+            out:write(chunk)
+        end
+
+        input:close()
         out:close()
+    end
+else
+    local out = io.open(target_path, "wb")
+    if not out then
         return ngx.exit(ngx.HTTP_INTERNAL_SERVER_ERROR)
     end
 
-    while true do
-        local chunk = input:read(65536)
-        if not chunk then
-            break
-        end
-        out:write(chunk)
-    end
-
-    input:close()
+    out:write(body_data)
+    out:close()
 end
-
-out:close()
 
 ngx.status = ngx.HTTP_OK
 ngx.header["Content-Type"] = "application/json"

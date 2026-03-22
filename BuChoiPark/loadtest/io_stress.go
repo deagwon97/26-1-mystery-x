@@ -12,6 +12,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -148,6 +149,7 @@ type config struct {
 	userID string
 
 	readRatio float64
+	uploadMode string
 
 	uploadMinMB int
 	uploadMaxMB int
@@ -170,13 +172,14 @@ func parseFlags() config {
 	}
 
 	flag.StringVar(&cfg.baseURL, "base-url", defaultBaseURL, "Target base URL")
-	flag.StringVar(&cfg.stagesRaw, "stages", "10:10s,20:10s", "Stage spec: concurrency:duration comma-separated")
+	flag.StringVar(&cfg.stagesRaw, "stages", "4:40s", "Stage spec: concurrency:duration comma-separated")
 	flag.Int64Var(&cfg.seed, "seed", time.Now().UnixNano(), "Random seed")
 
 	flag.StringVar(&cfg.userID, "user-id", "io-stress-user", "userId used for upload/list")
-	flag.Float64Var(&cfg.readRatio, "read-ratio", 0.80, "Read ratio (0~1), write ratio is 1-read-ratio")
-	flag.IntVar(&cfg.uploadMinMB, "upload-min-mb", 500, "Minimum upload size in MB")
-	flag.IntVar(&cfg.uploadMaxMB, "upload-max-mb", 1000, "Maximum upload size in MB")
+	flag.Float64Var(&cfg.readRatio, "read-ratio", 0.50, "Read ratio (0~1), write ratio is 1 - read-ratio")
+	flag.StringVar(&cfg.uploadMode, "upload-mode", "multipart", "Upload payload mode: multipart or raw")
+	flag.IntVar(&cfg.uploadMinMB, "upload-min-mb", 100, "Minimum upload size in MB")
+	flag.IntVar(&cfg.uploadMaxMB, "upload-max-mb", 200, "Maximum upload size in MB")
 
 	flag.IntVar(&cfg.prepareCount, "prepare-count", 8, "Number of files uploaded before stress")
 	flag.IntVar(&cfg.prepareSizeMB, "prepare-size-mb", 100, "Size (MB) of each prepare upload")
@@ -190,6 +193,10 @@ func parseFlags() config {
 
 	if cfg.readRatio < 0 || cfg.readRatio > 1 {
 		panic("read-ratio must be between 0 and 1")
+	}
+	cfg.uploadMode = strings.ToLower(strings.TrimSpace(cfg.uploadMode))
+	if cfg.uploadMode != "multipart" && cfg.uploadMode != "raw" {
+		panic("upload-mode must be one of: multipart, raw")
 	}
 	if cfg.uploadMinMB <= 0 || cfg.uploadMaxMB < cfg.uploadMinMB {
 		panic("invalid upload-min-mb/upload-max-mb")
@@ -295,7 +302,7 @@ func main() {
 
 	fmt.Println("I/O stress started")
 	fmt.Printf("baseURL=%s stages=%s seed=%d\n", cfg.baseURL, cfg.stagesRaw, cfg.seed)
-	fmt.Printf("mode: read-ratio=%.2f write-ratio=%.2f upload-size=%d~%dMB\n", cfg.readRatio, 1.0-cfg.readRatio, cfg.uploadMinMB, cfg.uploadMaxMB)
+	fmt.Printf("mode: read-ratio=%.2f write-ratio=%.2f upload-size=%d~%dMB upload-mode=%s\n", cfg.readRatio, 1.0-cfg.readRatio, cfg.uploadMinMB, cfg.uploadMaxMB, cfg.uploadMode)
 	fmt.Printf("prepare: skip=%v count=%d sizeMB=%d userId=%s\n", cfg.skipPrepare, cfg.prepareCount, cfg.prepareSizeMB, cfg.userID)
 
 	ids := make([]string, 0)
@@ -337,7 +344,7 @@ func prepareFiles(cfg config, client *http.Client, r *rand.Rand) ([]string, erro
 	for i := 0; i < cfg.prepareCount; i++ {
 		ctx, cancel := context.WithTimeout(context.Background(), cfg.prepareTimeout)
 		filePath := fmt.Sprintf("/io-stress/prepare/%02d/f-%d.bin", i+1, r.Int63())
-		id, status, _, _, err := uploadFile(ctx, client, cfg.baseURL, cfg.userID, filePath, sizeBytes)
+		id, status, _, _, err := uploadFile(ctx, client, cfg, filePath, sizeBytes)
 		cancel()
 		if err != nil {
 			return nil, fmt.Errorf("prepare upload failed idx=%d err=%w", i+1, err)
@@ -394,7 +401,7 @@ func runStress(stages []stage, cfg config, client *http.Client, pool *filePool, 
 				}
 				sizeBytes := int64(sizeMB) * 1024 * 1024
 				filePath := fmt.Sprintf("/io-stress/run/%02d/%d.bin", workerID, r.Int63())
-				uploadedID, status, latency, _, err := uploadFile(wctx, client, cfg.baseURL, cfg.userID, filePath, sizeBytes)
+				uploadedID, status, latency, _, err := uploadFile(wctx, client, cfg, filePath, sizeBytes)
 				zeroKind, isErr := classifyRequestError(err, status)
 				m.add("POST /files/upload", latency, status, sizeBytes, isErr, zeroKind)
 				if err == nil && status >= 200 && status < 300 {
@@ -438,7 +445,14 @@ func runStress(stages []stage, cfg config, client *http.Client, pool *filePool, 
 	workerWG.Wait()
 }
 
-func uploadFile(ctx context.Context, client *http.Client, baseURL, userID, filePath string, sizeBytes int64) (string, int, time.Duration, []byte, error) {
+func uploadFile(ctx context.Context, client *http.Client, cfg config, filePath string, sizeBytes int64) (string, int, time.Duration, []byte, error) {
+	if cfg.uploadMode == "raw" {
+		return uploadFileRaw(ctx, client, cfg.baseURL, cfg.userID, filePath, sizeBytes)
+	}
+	return uploadFileMultipart(ctx, client, cfg.baseURL, cfg.userID, filePath, sizeBytes)
+}
+
+func uploadFileMultipart(ctx context.Context, client *http.Client, baseURL, userID, filePath string, sizeBytes int64) (string, int, time.Duration, []byte, error) {
 	start := time.Now()
 
 	pr, pw := io.Pipe()
@@ -485,6 +499,31 @@ func uploadFile(ctx context.Context, client *http.Client, baseURL, userID, fileP
 	var parsed uploadResponse
 	_ = json.Unmarshal(body, &parsed)
 	return parsed.ID, resp.StatusCode, time.Since(start), body, nil
+}
+
+func uploadFileRaw(ctx context.Context, client *http.Client, baseURL, userID, filePath string, sizeBytes int64) (string, int, time.Duration, []byte, error) {
+	start := time.Now()
+	body := io.LimitReader(endlessByteReader{}, sizeBytes)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/files/upload", body)
+	if err != nil {
+		return "", 0, 0, nil, err
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("X-User-Id", userID)
+	req.Header.Set("X-File-Path", filePath)
+	req.Header.Set("X-File-Name", path.Base(filePath))
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", 0, time.Since(start), nil, err
+	}
+	defer resp.Body.Close()
+	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+
+	var parsed uploadResponse
+	_ = json.Unmarshal(bodyBytes, &parsed)
+	return parsed.ID, resp.StatusCode, time.Since(start), bodyBytes, nil
 }
 
 func downloadFile(ctx context.Context, client *http.Client, baseURL, id string) (int, int64, time.Duration, error) {
