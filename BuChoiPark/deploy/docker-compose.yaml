@@ -2,7 +2,7 @@ services:
   server-debug:
     build:
       context: ../
-      dockerfile: ../deploy/Dockerfile
+      dockerfile: ./deploy/Dockerfile
       target: builder
     container_name: buchoipark-server-debug
     environment:
@@ -26,6 +26,10 @@ services:
       - ../data/uploads:/app/data/uploads
       - ../src:/app/src
       - ../e2e-test:/app/e2e-test
+    # command: "bash -c 'tail -f /dev/null'"
+    command: "./gradlew bootRun"
+    ports:
+      - "3030:8080"
     stdin_open: true
     tty: true
     cpus: "2.0"
@@ -43,6 +47,8 @@ services:
       - ../data/uploads:/app/data/uploads
     depends_on:
       - server-debug
+    ports:
+      - "3031:8080"
     cpus: "2.0"
     mem_limit: 4g
     restart: unless-stopped
@@ -64,14 +70,14 @@ services:
       - server-debug
     stdin_open: true
     tty: true
-    command: "bash -c 'tail -f /dev/null'"
+    # command: "bash -c 'tail -f /dev/null'"
     cpus: "16.0"
     mem_limit: 32g
     restart: unless-stopped
   container-monitor:
     build:
       context: ../metric
-      dockerfile: ./metric/Dockerfile
+      dockerfile: ./Dockerfile
     container_name: container-monitor
     environment:
       - TARGET_CONTAINER=${TARGET_CONTAINER:-server-debug}

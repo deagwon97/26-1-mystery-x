@@ -1,0 +1,13 @@
+services:
+  loadtest:
+    image: golang:1.24-bookworm
+    container_name: loadtest
+    working_dir: /work/src
+    volumes:
+      - ./src:/work/src
+    stdin_open: true
+    tty: true
+    command: "bash -c 'tail -f /dev/null'"
+    cpus: "16.0"
+    mem_limit: 32g
+    restart: unless-stopped

@@ -9,9 +9,9 @@ COPY build.gradle.kts settings.gradle.kts gradlew ./
 COPY gradle ./gradle
 RUN chmod +x gradlew && ./gradlew dependencies --no-daemon
 
-COPY ./ /app/src
+COPY ./ /app
 
-WORKDIR /app/src
+WORKDIR /app
 
 RUN ./gradlew clean bootJar -x test --no-daemon
 
