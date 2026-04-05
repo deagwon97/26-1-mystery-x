@@ -785,6 +785,7 @@ func scenarioDeleteFiles() []CaseResult {
 			latencies = append(latencies, float64(r.latency.Milliseconds()))
 			if r.err != nil {
 				fail++
+				fmt.Printf("    DELETE FAIL: %v\n", r.err)
 			} else {
 				ok++
 			}

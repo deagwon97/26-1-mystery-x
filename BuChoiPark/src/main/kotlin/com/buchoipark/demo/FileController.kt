@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
+import org.springframework.web.bind.annotation.RequestHeader
 import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 import org.springframework.web.context.request.async.DeferredResult
@@ -367,30 +368,37 @@ class FileController(
 
     @PostMapping("/files/upload")
     fun uploadFile(
-        @RequestParam("userId") userId: String,
-        @RequestParam("filePath") filePath: String,
-        @RequestParam("file") file: MultipartFile,
+        @RequestParam("userId") userId: String? = null,
+        @RequestParam("filePath") filePath: String? = null,
+        @RequestParam("file") file: MultipartFile? = null,
+        @RequestHeader("X-User-Id") userIdHeader: String? = null,
+        @RequestHeader("X-File-Path") filePathHeader: String? = null,
+        @RequestHeader("X-File-Name") fileNameHeader: String? = null,
     ): DeferredResult<ResponseEntity<FileUploadResponse>> {
+        // 헤더에서 파라미터 받기 (nginx 프록시 시)
+        val effectiveUserId = userId ?: userIdHeader
+        val effectiveFilePath = filePath ?: filePathHeader
+        val effectiveFile = file
         val deferredResult = DeferredResult<ResponseEntity<FileUploadResponse>>(uploadQueueTimeoutMs)
 
-        if (userId.isBlank()) {
+        if (effectiveUserId.isNullOrBlank()) {
             deferredResult.setResult(ResponseEntity.status(HttpStatus.BAD_REQUEST).build())
             return deferredResult
         }
-        if (filePath.isBlank()) {
+        if (effectiveFilePath.isNullOrBlank()) {
             deferredResult.setResult(ResponseEntity.status(HttpStatus.BAD_REQUEST).build())
             return deferredResult
         }
-        if (file.isEmpty) {
+        if (effectiveFile == null || effectiveFile.isEmpty) {
             deferredResult.setResult(ResponseEntity.status(HttpStatus.BAD_REQUEST).build())
             return deferredResult
         }
 
-        val inFlightBytes = file.size.coerceAtLeast(0)
+        val inFlightBytes = effectiveFile.size.coerceAtLeast(0)
 
         // 대기열이 없을 때만 즉시 실행해 불필요한 큐잉 지연을 피합니다.
         if (uploadQueuedCount.get() == 0 && uploadSemaphore.tryAcquire() && uploadInFlightLimiter.tryAcquire(inFlightBytes)) {
-            completeUpload(deferredResult, userId, filePath, file, inFlightBytes)
+            completeUpload(deferredResult, effectiveUserId, effectiveFilePath, effectiveFile, inFlightBytes)
             return deferredResult
         }
 
@@ -408,9 +416,9 @@ class FileController(
         }
 
         val queuedRequest = QueuedUploadRequest(
-            userId = userId,
-            filePath = filePath,
-            file = file,
+            userId = effectiveUserId,
+            filePath = effectiveFilePath,
+            file = effectiveFile,
             deferredResult = deferredResult,
             reservedBytes = queueReservedBytes,
             inFlightBytes = inFlightBytes,

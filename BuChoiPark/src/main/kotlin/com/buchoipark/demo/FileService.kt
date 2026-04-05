@@ -110,7 +110,7 @@ class FileService(
                     folderEntries[childFolderName] = FolderEntryResponse(
                         type = "FOLDER",
                         name = childFolderName,
-                        path = childFolderPath,
+                        filePath = childFolderPath,
                     )
                 }
             } else {
@@ -118,7 +118,7 @@ class FileService(
                     FolderEntryResponse(
                         type = "FILE",
                         name = file.fileName,
-                        path = file.filePath,
+                        filePath = file.filePath,
                         id = file.id,
                         fileSize = file.fileSize,
                         uploadedAt = file.uploadedAt,
@@ -219,7 +219,7 @@ data class FileDownload(
 data class FolderEntryResponse(
     val type: String,
     val name: String,
-    val path: String,
+    val filePath: String,
     val id: String? = null,
     val fileSize: Long? = null,
     val uploadedAt: String? = null,
